@@ -1,0 +1,56 @@
+-- current thoughts
+
+ban & operator
+allocate everything on stack
+
+later do smarter work to allocate registers to local variables
+THEN
+determine which locals have & applied to them and don't register allocate
+
+--
+
+structs must be stack / heap allocated
+
+size of stack allocated arrays must be proven at compile time
+
+arg    -> $t0
+local  -> $t1
+struct -> $t2
+array  -> $t3
+accum  -> $t4
+
+-- function semantics
+
+function <#args> <#locals> translates into:
+push $a registers in reverse order
+arg pointer = stack pointer
+allocate #locals words of stack space
+local pointer = stack pointer
+begin execution.
+
+
+return translates into:
+save top of stack into $v0
+stack pointer = arg pointer + 4 * #args (clears the stack frame of this function)
+jr $ra
+
+
+and then call <#args> is:
+
+#if (#args == 0)
+push accumulator (so that after function execution it is on stack and $v0 is in $acc)
+save pointers
+save $ra
+
+#else
+pop arguments into a registers.
+Shift remaining (#args-4) top elements of stack down 5 words
+Save pointers into 4 of those those words
+Save $ra into 5th word
+
+#endif
+jal
+save return value into $t5 (the accumulator)
+Restore $ra
+Restore pointers
+continue execution
