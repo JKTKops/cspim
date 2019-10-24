@@ -6,6 +6,7 @@ import Text.Read
 import Data.Functor
 
 import Data.Array
+import Data.Char (isSpace)
 import Data.List (mapAccumL)
 
 import VM.Language
@@ -16,9 +17,9 @@ instance Show ParseError where
     show (ParseErrorAtLine line code) = "Parse error: " ++ show line ++ ": " ++ code
 
 parseVM :: String -> Either [ParseError] VmProgram
-parseVM s = let instStrings = zip [1..] $ lines s
+parseVM s = let instStrings = filter (\(_, l) -> not $ all isSpace l) $ zip [1..] $ lines s
                 accum errs (line, instString) = case reads instString of
-                    [(inst, "")] -> (errs, inst)
+                    [(inst, _)] -> (errs, inst)
                     _ -> (\tail -> errs [ParseErrorAtLine line instString] ++ tail, VmTerminate)
 
                 (diff, insts) = mapAccumL accum id instStrings
@@ -29,7 +30,9 @@ parseVM s = let instStrings = zip [1..] $ lines s
                    _  -> Left errs
 
 instance Read InstType where
-    readPrec =     (lexIdent "unsigned" $> InstUnsigned)
+    readPrec =     (lexIdent "byte"     $> InstByte)
+               <++ (lexIdent "short"    $> InstShort)
+               <++ (lexIdent "unsigned" $> InstUnsigned)
                <++ (lexIdent "signed"   $> InstSigned)
                <++ (lexIdent "float"    $> InstFloat)
                <++ (lexIdent "double"   $> InstDouble)
@@ -57,8 +60,7 @@ instance Read VmInstruction where
                        return $ VmPush i_type arg)
 
                <++ (lexIdent "pop" >> VmPop <$> readPrec <*> readPrec)
-               <++ (do lexIdent "label"
-                       Ident label <- lexP
+               <++ (do Ident label <- lexP
                        Symbol ":"  <- lexP
                        return $ VmLabel label)
                <++ (do lexIdent "goto"
@@ -83,6 +85,7 @@ instance Read VmInstruction where
                <++ (lexIdent "nor"  $> VmNor)
                <++ (lexIdent "xor"  $> VmXor)
                <++ (lexIdent "not"  $> VmNot)
+               <++ (lexIdent "comp" $> VmComp)
 
                <++ (lexOp "eq" >>= return <$> \case
                            None -> VmEq
@@ -130,6 +133,8 @@ instance Read VmInstruction where
                            None -> VmDiv
                            DotS -> VmDivS
                            DotD -> VmDivD)
+
+               <++ (lexIdent "sll"  $> VmSll)
 
                <++ (lexIdent "addu" $> VmAddU)
                <++ (lexIdent "subu" $> VmSubU)

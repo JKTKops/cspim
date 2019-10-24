@@ -59,12 +59,12 @@ panic msg = let formatted =
 -- Defined here because this is a translation detail that could change.
 -------------------------------------
 
-pattern ArgPtr    = RegT0
-pattern LclPtr    = RegT1
-pattern StructPtr = RegT2
-pattern ArrayPtr  = RegT3
-pattern Acc       = RegT4
-pattern Tmp       = RegT5  -- a temporary register used for binary operations.
+pattern ArgPtr    = RegS0
+pattern LclPtr    = RegS1
+pattern StructPtr = RegS2
+pattern ArrayPtr  = RegS3
+pattern Acc       = RegS4
+pattern Tmp       = RegS5  -- a temporary register used for binary operations.
                            -- not saved, generally used like the assembler uses $at.
 
 pattern StackPtr  = RegSP
@@ -185,7 +185,7 @@ li  ${Acc}, !{imm} # #{show inst}
 
 push (VmPush i_type (Left (VmAddress segment offset))) = case i_type of
     InstDouble -> pushDoubleFrom segment offset
-    _          -> pushWordFrom segment offset
+    _          -> pushOtherFrom i_type segment offset
 
 pushDoubleFrom :: VirtualMemorySegment -> Offset -> Translator ()
 pushDoubleFrom vms offset = case vms of
@@ -199,18 +199,22 @@ sw  ${Acc}, 0($sp)                              #N Store upper word of double in
 lw  ${Acc}, !{offset}(${vms2Ptr vms})           # push double #{show vms} #{show offset}
 |]
 
-pushWordFrom :: VirtualMemorySegment -> Offset -> Translator ()
-pushWordFrom vms offset = case vms of
+pushOtherFrom :: InstType -> VirtualMemorySegment -> Offset -> Translator ()
+pushOtherFrom i_type vms offset = case vms of
     VmsStatic  -> panic "Push from static not implemented."
-    VmsPointer -> pushWordFromPointer offset
-    _          -> currentInst >>= \it -> emit [mips|
-sub $sp, $sp, 4                             #N allocate 1 word
-sw  ${Acc}, 0($sp)                          #N move acc to top of stack
-lw  ${Acc}, !{offset}(${vms2Ptr vms})       # #{show it}
-|]
+    VmsPointer -> pushFromPointer offset
+    _          -> do
+        it <- currentInst
+        emit [mips| sub $sp, $sp, 4    #N allocate 1 word
+                    sw  ${Acc}, 0($sp) #N move acc to top of stack
+                  |]
+        case i_type of
+            InstByte  -> emit [mips| lbu ${Acc}, !{offset}(${vms2Ptr vms}) # #{show it} |]
+            InstShort -> emit [mips| lhu ${Acc}, !{offset}(${vms2Ptr vms}) # #{show it} |]
+            _         -> emit [mips| lw  ${Acc}, !{offset}(${vms2Ptr vms}) # #{show it} |]
 
-pushWordFromPointer :: Offset -> Translator ()
-pushWordFromPointer offset =
+pushFromPointer :: Offset -> Translator ()
+pushFromPointer offset =
     let reg = case offset of
             0 -> StructPtr
             1 -> ArrayPtr
@@ -226,7 +230,7 @@ move ${Acc}, ${reg}     # #{show inst}
 pop :: VmInstruction -> Translator ()
 pop (VmPop i_type (VmAddress segment offset)) = case i_type of
     InstDouble -> popDoubleTo segment offset
-    _          -> popWordTo segment offset
+    _          -> popOtherTo i_type segment offset
 
 
 popDoubleTo :: VirtualMemorySegment -> Offset -> Translator ()
@@ -241,18 +245,23 @@ lw   ${Acc}, 4($sp)                        #N pull top of stack into acc
 add  $sp,    $sp, 8                        # pop double #{show vms} #{show offset}
 |]
 
-popWordTo :: VirtualMemorySegment -> Offset -> Translator ()
-popWordTo vms offset = case vms of
+popOtherTo :: InstType -> VirtualMemorySegment -> Offset -> Translator ()
+popOtherTo i_type vms offset = case vms of
     VmsStatic  -> panic "Pop to static not implemented."
-    VmsPointer -> popWordToPointer offset
-    _ -> currentInst >>= \inst -> emit [mips|
-sw  ${Acc}, !{offset}(${vms2Ptr vms})     #N pop acc
+    VmsPointer -> popToPointer offset
+    _ -> do
+        inst <- currentInst
+        case i_type of
+            InstByte  -> emit [mips| sb ${Acc}, !{offset}(${vms2Ptr vms}) |]
+            InstShort -> emit [mips| sh ${Acc}, !{offset}(${vms2Ptr vms}) |]
+            _         -> emit [mips| sw ${Acc}, !{offset}(${vms2Ptr vms}) |]
+        emit [mips|
 lw  ${Acc}, 0($sp)                        #N pull top of stack into acc
 add $sp,    $sp, 4                        # #{show inst}
 |]
 
-popWordToPointer :: Offset -> Translator ()
-popWordToPointer offset =
+popToPointer :: Offset -> Translator ()
+popToPointer offset =
     let reg = case offset of
             0 -> StructPtr
             1 -> ArrayPtr
@@ -270,57 +279,57 @@ controlFlow (VmLabel  label) = emit [mips| @{label}: |]
 controlFlow (VmGoto   label) = emit [mips| j @{label} # goto #{label} |]
 controlFlow (VmIfGoto label) =
     emit [mips|
-lw   ${Tmp}, 0($sp)
+move ${Tmp}, ${Acc}
+lw   ${Acc}, 0($sp)
 add  $sp, $sp, 4
-bnez ${Acc}, @{label} # ifgoto #{label}
+bnez ${Tmp}, @{label} # ifgoto #{label}
 |]
 controlFlow (VmFunc label args lcls) = do
     emit [mips| @{label}: # start of function #{label} |]
     pushArgs args
     let plural = if lcls == 1 then "" else "s"
-    emit [mips| move ${ArgPtr}, $sp # set arg ptr
+    savePtrs
+    emit [mips| add  ${ArgPtr}, $sp, 20    # set arg ptr
                 sub  $sp, $sp, !{4 * lcls} # make space for #{show lcls} local word#{plural}
-                move ${LclPtr}, $sp # set local ptr
+                move ${LclPtr}, $sp        # set local ptr
               |]
     nArgs .= args
 controlFlow (VmCall label args) = do
     if args == 0
-      then do
-          emit [mips| sub $sp, $sp, 24 # 6 words for acc, ptrs, and $ra
-                      sw  ${Acc}, 20($sp)
-                    |]
-          savePtrs StackPtr
-      else do
-          popArgs args
-          let remainingArgs = if args < 4 then 0 else args - 4
-          emit [mips| sub $sp, $sp, 20 # 5 words for ptrs and $ra |]
-          shiftArgs remainingArgs
-          emit [mips| add ${Acc}, $sp, !{remainingArgs * 4} |]
-          savePtrs Acc
+      then emit [mips| sub $sp, $sp, 4 # 1 word for acc
+                       sw  ${Acc}, 0($sp)
+                     |]
+      else popArgs args
     emit [mips| jal @{label}              # call #{label}
-                move ${Acc},       $v0
-                lw   $ra,          0($sp)
-                lw   ${ArrayPtr},  4($sp)
-                lw   ${StructPtr}, 8($sp)
-                lw   ${LclPtr},   12($sp)
-                lw   ${ArgPtr},   16($sp)
-                add  $sp, $sp,    20      # restore $ra and ptrs
+                move ${Acc},       $v0    # $acc = return value
               |]
 
-  where savePtrs spreg =
-            emit [mips| sw  ${ArgPtr},   16(${spreg})
-                        sw  ${LclPtr},   12(${spreg})
-                        sw  ${StructPtr}, 8(${spreg})
-                        sw  ${ArrayPtr},  4(${spreg})  # save ptrs
-                        sw  $ra,          0(${spreg})  # save $ra
-                      |]
 controlFlow VmReturn = do
     args <- use nArgs
     emit [mips|
 move $v0, ${Acc}
-add  $sp, ${ArgPtr}, !{4 * args}
+move ${Tmp}, ${ArgPtr}    # save arg ptr
+
+sub  $sp, ${ArgPtr}, 20   # move $sp to saved values
+lw   $ra, 0($sp)
+lw   ${ArrayPtr}, 4($sp)
+lw   ${StructPtr}, 8($sp)
+lw   ${LclPtr}, 12($sp)
+lw   ${ArgPtr}, 16($sp)   # restore saved values
+
+add  $sp, ${Tmp}, !{4 * args} # use saved arg ptr to restore $sp
 jr   $ra                          # return
 |]
+
+savePtrs :: Translator ()
+savePtrs =
+    emit [mips| sub $sp, $sp, 20          # 5 words for ptrs and $ra
+                sw  ${ArgPtr},   16($sp)
+                sw  ${LclPtr},   12($sp)
+                sw  ${StructPtr}, 8($sp)
+                sw  ${ArrayPtr},  4($sp)  # save ptrs
+                sw  $ra,          0($sp)  # save $ra
+              |]
 
 pushArgs :: Word32 -> Translator ()
 pushArgs n | n > 4 = pushArgs 4
@@ -346,7 +355,7 @@ pushArgs 4 = emit [mips| sub $sp, $sp, 16
                        |]
 
 popArgs :: Word32 -> Translator ()
-popArgs n = do
+popArgs 0 = do
     when (n >= 1) $ emit [mips| move $a0, ${Acc}  |]
     when (n >= 2) $ emit [mips| lw   $a1, 0($sp)  |]
     when (n >= 3) $ emit [mips| lw   $a2, 4($sp)  |]
@@ -382,8 +391,9 @@ was the argument which was pushed to the stack first.
 -}
 
 logicOp :: VmInstruction -> Translator ()
-logicOp VmNot = emit [mips| seq ${Acc}, ${Acc}, 0 # not |]
-logicOp inst  = binOp >> case inst of
+logicOp VmNot  = emit [mips| seq ${Acc}, ${Acc}, 0 # not |]
+logicOp VmComp = emit [mips| not ${Acc}, ${Acc}    # comp |]
+logicOp inst   = binOp >> case inst of
     VmAnd -> emit [mips| and ${Acc}, ${Tmp}, ${Acc} # and |]
     VmOr  -> emit [mips| or  ${Acc}, ${Tmp}, ${Acc} # or  |]
     VmNor -> emit [mips| nor ${Acc}, ${Tmp}, ${Acc} # nor |]
@@ -474,10 +484,11 @@ signedArith inst = do
     binOp
     let com = show inst
     case inst of
-        VmAdd -> emit [mips| add ${Acc}, ${Tmp}, ${Acc} # #{com} |]
-        VmSub -> emit [mips| sub ${Acc}, ${Tmp}, ${Acc} # #{com} |]
-        VmMul -> emit [mips| mul ${Acc}, ${Tmp}, ${Acc} # #{com} |]
-        VmDiv -> emit [mips| div ${Acc}, ${Tmp}, ${Acc} # #{com} |]
+        VmAdd -> emit [mips| add  ${Acc}, ${Tmp}, ${Acc} # #{com} |]
+        VmSub -> emit [mips| sub  ${Acc}, ${Tmp}, ${Acc} # #{com} |]
+        VmMul -> emit [mips| mul  ${Acc}, ${Tmp}, ${Acc} # #{com} |]
+        VmDiv -> emit [mips| div  ${Acc}, ${Tmp}, ${Acc} # #{com} |]
+        VmSll -> emit [mips| sllv ${Acc}, ${Tmp}, ${Acc} # #{com} |]
 
 unsignedArith :: VmInstruction -> Translator ()
 unsignedArith inst = do

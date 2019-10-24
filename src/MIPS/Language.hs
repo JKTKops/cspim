@@ -91,6 +91,7 @@ data MipsInstruction
  | MMul   RDest RSrc Src2
  | MMulou RDest RSrc Src2 -- Try translating this as mulou
                           -- otherwise use multu .. mflo
+ | MSllv  RDest RSrc RSrc
  | MNeg   RDest RSrc
  | MNegu  RDest RSrc
 

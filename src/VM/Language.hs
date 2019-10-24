@@ -8,7 +8,9 @@ import Data.Word
 type Pointer = Word32
 type Offset  = Word32
 
-data InstType = InstUnsigned
+data InstType = InstByte
+              | InstShort
+              | InstUnsigned
               | InstSigned
               | InstFloat
               | InstDouble
@@ -43,6 +45,7 @@ data VmInstruction
    -- TODO Conversion instructions
 
    -- TODO Bitwise instructions
+ | VmComp -- complement
 
    -- Logical operations
  | VmAnd
@@ -92,6 +95,7 @@ data VmInstruction
  | VmSub
  | VmMul
  | VmDiv
+ | VmSll
 
    -- Unsigned operations
  | VmAddU
@@ -135,6 +139,7 @@ isLogicOp inst = case inst of
     VmNor  -> True
     VmXor  -> True
     VmNot  -> True
+    VmComp -> True
     _      -> False
 
 isSignedComp :: VmInstruction -> Bool
@@ -181,6 +186,7 @@ isSignedOp inst = case inst of
     VmSub  -> True
     VmMul  -> True
     VmDiv  -> True
+    VmSll  -> True
     _      -> False
 
 isUnsignedOp :: VmInstruction -> Bool
@@ -228,6 +234,8 @@ data SystemCode
      deriving (Eq, Ord, Enum, Bounded)
 
 instance Show InstType where
+    show InstByte     = "byte"
+    show InstShort    = "short"
     show InstUnsigned = "unsigned"
     show InstSigned   = "signed"
     show InstFloat    = "float"
@@ -264,6 +272,7 @@ instance Show VmInstruction where
     show VmNor  = "nor"
     show VmXor  = "xor"
     show VmNot  = "not"
+    show VmComp = "comp"
 
    -- Signed comparisons
     show VmEq   = "eq"
@@ -301,6 +310,8 @@ instance Show VmInstruction where
     show VmSub  = "sub"
     show VmMul  = "mul"
     show VmDiv  = "div"
+
+    show VmSll  = "sll"
 
     -- Unsigned operations
     show VmAddU = "addu"

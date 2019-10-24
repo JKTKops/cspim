@@ -28,6 +28,7 @@ library:
   - array
   - containers
   - filepath
+  - hoopl
   - lens
   - mtl
   - parsec

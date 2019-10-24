@@ -100,7 +100,7 @@ makeMIPrettyInstance
 
 instance Pretty MipsLine where
     ppr (ML (Just md) Nothing) = ppr md
-    ppr (ML (Just md) (Just com)) = ppr md <> indent 50 (text "#" <+> text com)
+    ppr (ML (Just md) (Just com)) = ppr md <> indent 40 (text "#" <+> text com)
     ppr (ML Nothing Nothing) = empty
 
 instance Pretty MipsDeclaration where

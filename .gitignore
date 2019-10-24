@@ -1,3 +1,6 @@
 .stack-work/
+dist/
 cspim.cabal
+.gitignore
+.dir-locals.el
 *~
