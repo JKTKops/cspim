@@ -19,6 +19,7 @@ import Data.List (foldl', intercalate)
 import Data.Either (lefts, rights)
 import Data.Functor (($>))
 import Data.Word
+import Data.Int
 
 import Text.Parsec
 import Text.Parsec.Char
@@ -49,6 +50,9 @@ natural = fromIntegral <$> Parsec.natural tokParser
 integer :: Parser Word32
 integer = fromIntegral <$> Parsec.integer tokParser
 
+offset :: Parser Int32
+offset = fromIntegral <$> Parsec.integer tokParser
+
 parens :: Parser a -> Parser a
 parens = between (char '(') (char ')')
 
@@ -57,6 +61,7 @@ parens = between (char '(') (char ')')
 -------------
 
 newtype ParsedImm     = PI (Either Imm Exp)                      deriving (Typeable, Data)
+newtype ParsedOffset  = PO (Either Offset Exp)                   deriving (Typeable, Data)
 newtype ParsedReg     = PR (Either Reg Exp)                      deriving (Typeable, Data)
 newtype ParsedFReg    = PFR (Either FReg Exp)                    deriving (Typeable, Data)
 type    ParsedRDest   = ParsedReg
@@ -67,7 +72,7 @@ newtype ParsedSrc2    = PS2 (Either ParsedReg ParsedImm)         deriving (Typea
 newtype ParsedLabel   = PL (Either Label Exp)                    deriving (Typeable, Data)
 newtype ParsedAddress = PA (Either
                              ParsedLabel
-                             (ParsedImm, ParsedReg)) deriving (Typeable, Data)
+                             (ParsedOffset, ParsedReg)) deriving (Typeable, Data)
 
 data ParsedCommentPiece
      = StringPiece String
@@ -78,6 +83,10 @@ newtype ParsedComment = PC [ParsedCommentPiece]                  deriving (Typea
 instance Lift ParsedImm where
     lift (PI (Left imm))  = lift imm
     lift (PI (Right exp)) = return exp
+
+instance Lift ParsedOffset where
+    lift (PO (Left off))  = lift off
+    lift (PO (Right exp)) = return exp
 
 instance Lift ParsedReg where
     lift (PR (Left reg))  = lift reg
@@ -145,12 +154,14 @@ regByNumber = do
         Just reg -> return reg
 
 regByName :: Parser Reg
-regByName = regByNameZero <|> try regByNameSPRA <|> regByNameNumber
+regByName = regByNameZero <|> try regByNameSPRAFP <|> regByNameNumber
 
-regByNameZero, regByNameSPRA, regByNameNumber :: Parser Reg
+regByNameZero, regByNameSPRAFP, regByNameNumber :: Parser Reg
 regByNameZero = (do string "zero"; return Reg0) <|> (do char '0'; return Reg0)
 
-regByNameSPRA = (do string "sp"; return RegSP) <|> (do string "ra"; return RegRA)
+regByNameSPRAFP = (string "sp" $> RegSP)
+              <|> (string "ra" $> RegRA)
+              <|> (string "fp" $> RegFP)
 
 regByNameNumber = do
     bank <- lower
@@ -199,6 +210,10 @@ parseImm :: Parser ParsedImm
 parseImm = PI <$> (Left <$> integer
               <|> Right <$> spliceParser "!")
 
+parseOffset :: Parser ParsedOffset
+parseOffset = PO <$> (Left <$> offset
+                 <|> Right <$> spliceParser "!")
+
 parseSrc2 :: Parser ParsedSrc2
 parseSrc2 = PS2 <$> (Left <$> parseReg <|> Right <$> parseImm)
 
@@ -210,7 +225,7 @@ parseLabel = PL <$> (Left <$> do first <- letter
 
 parseAddr :: Parser ParsedAddress
 parseAddr = PA <$> (Left <$> parseLabel
-               <|> Right <$> do offset <- parseImm
+               <|> Right <$> do offset <- parseOffset
                                 reg    <- parens parseReg
                                 return (offset, reg))
 

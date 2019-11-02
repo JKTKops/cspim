@@ -6,9 +6,11 @@ import Language.Haskell.TH.Syntax
 import Data.Array
 import Data.Data
 import Data.Word
+import Data.Int
 
-type Label = String
-type Imm   = Word32
+type Label  = String
+type Imm    = Word32
+type Offset = Int32
 
 -- TODO these directives are fucked and need arguments where appropriate
 data Directive
@@ -32,6 +34,7 @@ data Reg
      | RegS0 | RegS1 | RegS2 | RegS3 | RegS4 | RegS5 | RegS6 | RegS7
      | RegSP
      | RegRA
+     | RegFP
      deriving (Eq, Ord, Show, Typeable, Data, Lift)
 
 -- | An association list of register indices to names, matching the 'Reg' data type.
@@ -68,7 +71,7 @@ type Src2  = Either Reg Imm
 type FRDest = FReg
 type FRSrc  = FReg
 
-type Address = Either Label (Imm, Reg)
+type Address = Either Label (Offset, Reg)
 
 {-
 This instruction set, as well as the arrangement and type synonym names,
