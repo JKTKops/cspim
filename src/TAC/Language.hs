@@ -5,12 +5,12 @@ module TAC.Language
     , Monop(..), Type(..)
 
     , intValueOfConst
-
     , isIntTy
+
+    , TacGraph(..), TacBlock
     ) where
 
 import Compiler.Hoopl
-import Compiler.SymbolTable
 
 type Name = Unique
 
@@ -122,7 +122,7 @@ instance NonLocal Insn where
     entryLabel (Label l) = l
 
     successors (Goto l) = [l]
-    successors (IfGoto _ t f) = [t, f]
+    successors (IfGoto _ t f) = [f, t] -- this makes postorder_dfs give us true-fallthrough
     successors (Call _ _ r) = [r]
     successors (Return _ _) = []
 
@@ -158,18 +158,16 @@ sllAlignment ty = let s = sizeof ty
     if s `mod` (2 ^ t) == 0
     then Just t else Nothing
 
+data TacGraph = TacGraph
+    { graph :: Graph Insn C C
+    , entry :: Label
+    }
+type TacBlock = Block Insn C C
+
 data Function = Fn
      { name   :: Name
      , args   :: [Name]
      , locals :: [Name] -- this includes temporary variables generated during tacifier
-     , entry  :: Label
-     , body   :: Graph Insn C C
+     , body   :: TacGraph
      }
 
-data Program = Prog
-     { functions   :: [Function]
-     , constants   :: [Constant] -- We'll put integer constants if we find them
-                                 -- but constant prop will remove them eventually
-     , globalVars  :: [Name]
-     , symbolTable :: SymbolTable
-     }

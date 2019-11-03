@@ -9,7 +9,7 @@ module TAC.CodeGen where
 
 import GHC.Exts (IsList (..))
 
-import TAC.Language as Tac
+import TAC.Program as Tac
 import Compiler.SymbolTable
 import MIPS.Language as Mips hiding (Label)
 import MIPS.Parser (mips)
@@ -19,6 +19,20 @@ import Data.WordUtils
 
 import Control.Monad.Except
 import Control.Monad.RWS.Strict
+
+mipsCodeGenProc :: Program -> Either CGError [MipsLine]
+mipsCodeGenProc Prog{functions = fns, symbolTable = symtab} =
+    let action = do -- written this way to make it easier to add constants and globalVars later
+            mapM_ codeGenFunction fns
+    in case unwrapCodeGen action symtab of
+        Left err      -> Left err
+        Right (_, dl) -> Right $ toList dl
+
+--------------------------------------------------------------------------------------
+--
+-- Difference Lists for efficient appending during emission
+--
+--------------------------------------------------------------------------------------
 
 newtype DiffList a = DL { unDL :: [a] -> [a] }
 
@@ -38,12 +52,10 @@ instance Show a => Show (DiffList a) where
     show (DL xs ) = "DL " ++ show (xs [])
 
 data CGError = UniqueNotInMap Unique
-             | LabelNotInMap  Tac.Label
              | Panic String
 
 instance Show CGError where
     show (UniqueNotInMap u) = "Unique " ++ show u ++ " could not be found in symbol table."
-    show (LabelNotInMap lb) = "Label " ++ show lb ++ " could not be found in symbol table."
     show (Panic s) = s
 
 newtype CodeGen a = CG { unCG :: ExceptT CGError (RWS SymbolTable (DiffList MipsLine) ()) a }
@@ -188,7 +200,20 @@ callCodeGen f_uniq args = panic "call not implemented"
 returnCodeGen :: Name -> Maybe RValue -> CodeGen ()
 returnCodeGen uniq mrval = panic "return not implemented"
 
+--------------------------------------------------------------------------------------
+--
+-- Entrypoints to the major instruction dispatcher
+--
+--------------------------------------------------------------------------------------
 
+-- TODO: emit a .globl directive!
+codeGenFunction :: Function -> CodeGen ()
+codeGenFunction f =
+    let blockInsns = insnsInFunction f
+    in mapM_ codeGenBlockInsns blockInsns
+
+codeGenBlockInsns :: BlockInsns -> CodeGen ()
+codeGenBlockInsns (e, ms, x) = insnCodeGen e >> mapM_ insnCodeGen ms >> insnCodeGen x
 
 --------------------------------------------------------------------------------------
 --
@@ -203,9 +228,6 @@ invertOffset ml = ml
 class SymTabKey k where
     notFound :: k -> CGError
 
-instance SymTabKey Tac.Label where
-    notFound = LabelNotInMap
-
 instance SymTabKey Int where -- Unique
     notFound = UniqueNotInMap
 
@@ -216,8 +238,15 @@ askCodeGen req key = do
         Nothing -> throwError $ notFound key
         Just v  -> return v
 
+{-
+askLabelName lbl = askLabelNameM lbl >>= \case
+    Just name -> pure name
+    Nothing   -> pure $ show lbl
+
+fmap combined with 'maybe' is more efficient
+-}
 askLabelName :: Tac.Label -> CodeGen String
-askLabelName = askCodeGen askLabelNameM
+askLabelName lbl = maybe (show lbl) id <$> askLabelNameM lbl
 
 askVarName :: Unique -> CodeGen String
 askVarName = askCodeGen askVarNameM
@@ -233,3 +262,52 @@ askMemLoc = askCodeGen askMemLocM
 
 askMemLocType :: Unique -> CodeGen (MemLoc, Type)
 askMemLocType uniq = (,) <$> askMemLoc uniq Prelude.<*> askVarType uniq
+
+--------------------------------------------------------------------------------------
+--
+-- Breaking the program down to initiate code generation
+
+-- Much of this is copied or inspired by ghc/compiler/cmmUtils which provides the
+-- toBlockListEntryFirstFalseFallthrough function used by the LLVM code generator.
+--
+--------------------------------------------------------------------------------------
+
+-- | Get the body out of a C/C graph.
+toBlockMap :: TacGraph -> Body Insn -- Body Insn ~ LabelMap (TacBlock)
+toBlockMap TacGraph{graph = GMany NothingO bodyMap NothingO} = bodyMap
+-- There are no other cases because we know the graph is C/C.
+
+-- | Gets a list of all the blocks in a TacGraph. No promises are made about order.
+toBlockList :: TacGraph -> [TacBlock]
+toBlockList g = mapElems $ toBlockMap g
+
+-- | Like 'toBlockList', but the entry block always comes first.
+toBlockListEntryFirst :: TacGraph -> [TacBlock]
+toBlockListEntryFirst g
+  | mapNull m = []
+  | otherwise = entry_block : others
+  where
+    m = toBlockMap g
+    entry_id = entry g
+    Just entry_block = mapLookup entry_id m
+    others = filter ((/= entry_id) . entryLabel) (mapElems m)
+
+-- | Like 'toBlockListEntryFirst', but we order the blocks so that the true case
+-- of a conditional branches to the next block in the output list of blocks.
+-- This lets us avoid emitting jump instructions for the true case!
+-- Note that we are relying on the order of successors returned for IfGoto by the
+-- NonLocal instance of Insn (defined in TAC/Language.hs) which is [f, t].
+toBlockListEntryFirstTrueFallthrough :: TacGraph -> [TacBlock]
+toBlockListEntryFirstTrueFallthrough g@TacGraph{entry = entLbl} =
+    postorder_dfs_from (toBlockMap g) entLbl
+
+type BlockInsns = (Insn C O, [Insn O O], Insn O C)
+
+insnsInBlock :: TacBlock -> BlockInsns
+insnsInBlock blk =
+    let (hd, tl) = blockSplitHead blk
+        (middle, end) = blockSplitTail tl
+    in (hd, blockToList middle, end)
+
+insnsInFunction :: Function -> [BlockInsns]
+insnsInFunction Fn{body = g} = map insnsInBlock $ toBlockListEntryFirstTrueFallthrough g
