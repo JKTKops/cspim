@@ -1,16 +1,12 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TemplateHaskell #-}
 module TAC.Language
     ( module Compiler.Hoopl
-    , Name, Constant(..), Var, Function(..), Insn(..), LValue(..), RValue(..), Binop(..)
-    , Monop(..), Type(..)
-
-    , intValueOfConst
-    , isIntTy
-
-    , TacGraph(..), TacBlock
+    , module TAC.Language
     ) where
 
 import Compiler.Hoopl
+import Control.Lens.TH
 
 type Name = Unique
 
@@ -131,23 +127,25 @@ instance HooplNode Insn where
     mkLabelNode = Label
 
 data Type
-     = CharTy
-     | ShortTy
-     | IntTy
-     | UIntTy
+     = CharTy Signage
+     | ShortTy Signage
+     | IntTy Signage
      | FloatTy
      | DoubleTy
      | ArrTy Int Type -- Type[Int]
      deriving (Eq, Ord, Show)
 
+data Signage = Signed | Unsigned
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
 isIntTy :: Type -> Bool
-isIntTy ty = ty `elem` [IntTy, UIntTy]
+isIntTy (IntTy _) = True
+isIntTy _         = False
 
 sizeof :: Type -> Int
-sizeof CharTy      = 1
-sizeof ShortTy     = 2
-sizeof IntTy       = 4
-sizeof UIntTy      = 4
+sizeof (CharTy _)  = 1
+sizeof (ShortTy _) = 2
+sizeof (IntTy _)   = 4
 sizeof FloatTy     = 4
 sizeof DoubleTy    = 8
 sizeof (ArrTy n t) = n * sizeof t
@@ -159,15 +157,18 @@ sllAlignment ty = let s = sizeof ty
     then Just t else Nothing
 
 data TacGraph = TacGraph
-    { graph :: Graph Insn C C
-    , entry :: Label
+    { _graph :: Graph Insn C C
+    , _entry :: Label
     }
+makeLenses ''TacGraph
+
 type TacBlock = Block Insn C C
 
 data Function = Fn
-     { name   :: Name
-     , args   :: [Name]
-     , locals :: [Name] -- this includes temporary variables generated during tacifier
-     , body   :: TacGraph
+     { _name   :: Name
+     , _args   :: [Name]
+     , _locals :: [Name] -- this includes temporary variables generated during tacifier
+     , _body   :: TacGraph
      }
 
+makeLenses ''Function

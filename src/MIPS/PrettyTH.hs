@@ -52,7 +52,7 @@ miPrettyClauseOfCtor (NormalC name btypes) = do
     let argPats = map VarP argNames
     ppr <- fromJust <$> lookupValueName "ppr"
     body <- NormalB <$> [| text $(liftString nonParsedName)
-                           <> indent 15 (mconcat $ punctuate (text ", ")
+                           <> indent 15 (punctuate (text ", ")
                               $(return $ ListE $ map ((VarE ppr `AppE`) . VarE) argNames)) |]
     return $ Clause [ConP name argPats] body []
 

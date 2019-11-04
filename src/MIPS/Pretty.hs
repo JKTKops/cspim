@@ -46,6 +46,9 @@ empty = DocEmpty
 text :: String -> Doc
 text = DocString
 
+char :: Char -> Doc
+char c = DocString [c]
+
 indent :: Int -> Doc -> Doc
 indent n d = DocIndent n <> d
 
@@ -58,15 +61,13 @@ parens :: Doc -> Doc
 parens d = DocString "(" <> d <> DocString ")"
 
 vsep :: [Doc] -> Doc
-vsep = mconcat . intersperse DocNewline
+vsep = punctuate DocNewline
 
 hsep :: [Doc] -> Doc
 hsep = foldl (<+>) DocEmpty
 
-punctuate :: Doc -> [Doc] -> [Doc]
-punctuate _ []  = []
-punctuate _ [d] = [d]
-punctuate p (d:ds) = d <> p : punctuate p ds
+punctuate :: Doc -> [Doc] -> Doc
+punctuate p = mconcat . intersperse p
 
 instance Semigroup Doc where
     (<>) = DocCombine
@@ -77,17 +78,27 @@ instance Monoid Doc where
 
 class Pretty a where
     ppr :: a -> Doc
+    pprList :: [a] -> Doc
+
+    pprList xs = char '[' <> punctuate (char ',') (map ppr xs) <> char ']'
 
 pretty :: Pretty a => a -> String
 pretty = render . ppr
+
+instance Pretty a => Pretty [a] where
+    ppr = pprList
 
 instance Pretty Directive where
     ppr = text . show
 
 makeRegPrettyInstances
 
-instance Pretty String where ppr = text
+instance Pretty Char   where
+    ppr c = char c
+    pprList = text
+
 instance Pretty Word32 where ppr = text . show
+instance Pretty Offset where ppr = text . show
 instance Pretty Src2 where
     ppr (Left reg)  = ppr reg
     ppr (Right imm) = ppr imm
@@ -102,6 +113,8 @@ instance Pretty MipsLine where
     ppr (ML (Just md) Nothing) = ppr md
     ppr (ML (Just md) (Just com)) = ppr md <> indent 40 (text "#" <+> text com)
     ppr (ML Nothing Nothing) = empty
+
+    pprList = vsep . map ppr
 
 instance Pretty MipsDeclaration where
     ppr (MDirective directive) = ppr directive

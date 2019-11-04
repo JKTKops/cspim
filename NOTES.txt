@@ -13,44 +13,19 @@ structs must be stack / heap allocated
 
 size of stack allocated arrays must be proven at compile time
 
-arg    -> $t0
-local  -> $t1
-struct -> $t2
-array  -> $t3
-accum  -> $t4
+--
 
--- function semantics
+.extern name <size in bytes>
+tells QtSpim to allocate name to the $gp segment. Then
+lw $t0, name
 
-function <#args> <#locals> translates into:
-push $a registers in reverse order
-arg pointer = stack pointer
-allocate #locals words of stack space
-local pointer = stack pointer
-begin execution.
+gets translated into
 
+lw $t0, <QtSpim-determined-offset>($gp)
 
-return translates into:
-save top of stack into $v0
-stack pointer = arg pointer + 4 * #args (clears the stack frame of this function)
-jr $ra
+instead of
 
+la $t0, name
+lw $t0, 0($t0)
 
-and then call <#args> is:
-
-#if (#args == 0)
-push accumulator (so that after function execution it is on stack and $v0 is in $acc)
-save pointers
-save $ra
-
-#else
-pop arguments into a registers.
-Shift remaining (#args-4) top elements of stack down 5 words
-Save pointers into 4 of those those words
-Save $ra into 5th word
-
-#endif
-jal
-save return value into $t5 (the accumulator)
-Restore $ra
-Restore pointers
-continue execution
+Free instruction save!

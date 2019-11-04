@@ -11,7 +11,13 @@ import Data.Int
 import Control.Lens.TH
 import Control.Monad.Reader
 
-data MemLoc = OffsetLoc Int32 | RegLoc Mips.Reg | FRegLoc Mips.FReg
+data MemLoc = OffsetLoc Int32
+            | RegLoc Mips.Reg
+            | FRegLoc Mips.FReg
+            -- TODO:
+            -- this turns into .extern <name>_<unique> <sizeof(typeof(unique))> if true (global)
+            -- otherwise into  .lcomm <name>_<unique> <sizeof(typeof(unique))>
+            | GPLoc Bool Unique
 
 data SymbolTable = SymTab
     { _labelNames :: LabelMap String
@@ -22,6 +28,9 @@ data SymbolTable = SymTab
     }
 
 makeLenses ''SymbolTable
+
+emptyTable :: SymbolTable
+emptyTable = SymTab mapEmpty mapEmpty mapEmpty mapEmpty mapEmpty
 
 lookupLabelName :: SymbolTable -> Label -> Maybe String
 lookupLabelName symtab lbl = let lmap = _labelNames symtab

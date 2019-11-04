@@ -1,15 +1,23 @@
+{-# LANGUAGE TemplateHaskell #-}
 module TAC.Program
-    ( Program(..)
+    ( module TAC.Program
     , module TAC.Language
     ) where
 
-import TAC.Language
+import TAC.Language hiding ((<*>))
+import qualified TAC.Language as Hoopl ((<*>))
 import Compiler.SymbolTable
+import Control.Lens.TH
+
+(<*|*>) :: NonLocal n => Graph n e O -> Graph n O x -> Graph n e x
+(<*|*>) = (Hoopl.<*>)
 
 data Program = Prog
-     { functions   :: [Function]
-     , constants   :: [Constant] -- We'll put integer constants if we find them
-                                 -- but constant prop will remove them eventually
-     , globalVars  :: [Name]
-     , symbolTable :: SymbolTable
+     { _functions   :: [Function]
+     , _constants   :: [Constant] -- We'll put integer constants if we find them
+                                  -- but constant prop will remove them eventually
+     , _globalVars  :: [Name]
+     , _symbolTable :: SymbolTable
      }
+
+makeLenses ''Program

@@ -21,7 +21,7 @@ import Control.Monad.Except
 import Control.Monad.RWS.Strict
 
 mipsCodeGenProc :: Program -> Either CGError [MipsLine]
-mipsCodeGenProc Prog{functions = fns, symbolTable = symtab} =
+mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
     let action = do -- written this way to make it easier to add constants and globalVars later
             mapM_ codeGenFunction fns
     in case unwrapCodeGen action symtab of
@@ -51,24 +51,25 @@ instance Monoid (DiffList a) where
 instance Show a => Show (DiffList a) where
     show (DL xs ) = "DL " ++ show (xs [])
 
-data CGError = UniqueNotInMap Unique
+data CGError = UniqueNotInMap String Unique
              | Panic String
 
 instance Show CGError where
-    show (UniqueNotInMap u) = "Unique " ++ show u ++ " could not be found in symbol table."
+    show (UniqueNotInMap mapName u) =
+        "Unique " ++ show u ++ " could not be found in symbol table: " ++ mapName ++ "."
     show (Panic s) = s
 
 newtype CodeGen a = CG { unCG :: ExceptT CGError (RWS SymbolTable (DiffList MipsLine) ()) a }
   deriving ( Functor, Applicative, Monad, MonadError CGError
            , MonadReader SymbolTable, MonadWriter (DiffList MipsLine))
 
-unwrapCodeGen :: CodeGen a -> SymbolTable -> Either CGError (a, DiffList MipsLine)
+unwrapCodeGen :: CodeGen a -> SymbolTable -> Either CGError (a, [MipsLine])
 unwrapCodeGen (CG erws) symtab =
     let f = runExceptT erws & runRWS
         (a, _, w) = f symtab ()
     in case a of
         Left err  -> Left err
-        Right val -> Right (val, w)
+        Right val -> Right (val, toList w)
 
 emit :: DiffList MipsLine -> CodeGen ()
 emit = tell
@@ -198,7 +199,7 @@ callCodeGen f_uniq args = panic "call not implemented"
 --   Destroys the function's frame restoring the frame pointer,
 --   but does /not/ clean the stack arguments. This is the responsibility of the caller.
 returnCodeGen :: Name -> Maybe RValue -> CodeGen ()
-returnCodeGen uniq mrval = panic "return not implemented"
+returnCodeGen uniq mrval = emit [mips| jr $ra |]--panic "return not implemented"
 
 --------------------------------------------------------------------------------------
 --
@@ -226,16 +227,16 @@ invertOffset (OffsetLoc o) = OffsetLoc (-o)
 invertOffset ml = ml
 
 class SymTabKey k where
-    notFound :: k -> CGError
+    notFound :: String -> k -> CGError
 
 instance SymTabKey Int where -- Unique
     notFound = UniqueNotInMap
 
-askCodeGen :: SymTabKey k => AskSymTabM k v -> k -> CodeGen v
-askCodeGen req key = do
+askCodeGen :: SymTabKey k => String -> AskSymTabM k v -> k -> CodeGen v
+askCodeGen n req key = do
     mv <- req key
     case mv of
-        Nothing -> throwError $ notFound key
+        Nothing -> throwError $ notFound n key
         Just v  -> return v
 
 {-
@@ -249,16 +250,16 @@ askLabelName :: Tac.Label -> CodeGen String
 askLabelName lbl = maybe (show lbl) id <$> askLabelNameM lbl
 
 askVarName :: Unique -> CodeGen String
-askVarName = askCodeGen askVarNameM
+askVarName = askCodeGen "var names" askVarNameM
 
 askVarType :: Unique -> CodeGen Type
-askVarType = askCodeGen askVarTypeM
+askVarType = askCodeGen "var types" askVarTypeM
 
 askFuncTable :: Unique -> CodeGen Function
-askFuncTable = askCodeGen askFuncTableM
+askFuncTable = askCodeGen "function table" askFuncTableM
 
 askMemLoc :: Unique -> CodeGen MemLoc
-askMemLoc = askCodeGen askMemLocM
+askMemLoc = askCodeGen "allocation table" askMemLocM
 
 askMemLocType :: Unique -> CodeGen (MemLoc, Type)
 askMemLocType uniq = (,) <$> askMemLoc uniq Prelude.<*> askVarType uniq
@@ -274,7 +275,7 @@ askMemLocType uniq = (,) <$> askMemLoc uniq Prelude.<*> askVarType uniq
 
 -- | Get the body out of a C/C graph.
 toBlockMap :: TacGraph -> Body Insn -- Body Insn ~ LabelMap (TacBlock)
-toBlockMap TacGraph{graph = GMany NothingO bodyMap NothingO} = bodyMap
+toBlockMap TacGraph{_graph = GMany NothingO bodyMap NothingO} = bodyMap
 -- There are no other cases because we know the graph is C/C.
 
 -- | Gets a list of all the blocks in a TacGraph. No promises are made about order.
@@ -288,7 +289,7 @@ toBlockListEntryFirst g
   | otherwise = entry_block : others
   where
     m = toBlockMap g
-    entry_id = entry g
+    entry_id = _entry g
     Just entry_block = mapLookup entry_id m
     others = filter ((/= entry_id) . entryLabel) (mapElems m)
 
@@ -298,7 +299,7 @@ toBlockListEntryFirst g
 -- Note that we are relying on the order of successors returned for IfGoto by the
 -- NonLocal instance of Insn (defined in TAC/Language.hs) which is [f, t].
 toBlockListEntryFirstTrueFallthrough :: TacGraph -> [TacBlock]
-toBlockListEntryFirstTrueFallthrough g@TacGraph{entry = entLbl} =
+toBlockListEntryFirstTrueFallthrough g@TacGraph{_entry = entLbl} =
     postorder_dfs_from (toBlockMap g) entLbl
 
 type BlockInsns = (Insn C O, [Insn O O], Insn O C)
@@ -310,4 +311,4 @@ insnsInBlock blk =
     in (hd, blockToList middle, end)
 
 insnsInFunction :: Function -> [BlockInsns]
-insnsInFunction Fn{body = g} = map insnsInBlock $ toBlockListEntryFirstTrueFallthrough g
+insnsInFunction Fn{_body = g} = map insnsInBlock $ toBlockListEntryFirstTrueFallthrough g
