@@ -1,23 +1,17 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 module Compiler.SymbolTable where
 
 import TAC.Language
 import qualified MIPS.Language as Mips
 
 import Data.Int
+import qualified Data.Map as M
 
 import Control.Lens.TH
 import Control.Monad.Reader
-
-data MemLoc = OffsetLoc Int32
-            | RegLoc Mips.Reg
-            | FRegLoc Mips.FReg
-            -- TODO:
-            -- this turns into .extern <name>_<unique> <sizeof(typeof(unique))> if true (global)
-            -- otherwise into  .lcomm <name>_<unique> <sizeof(typeof(unique))>
-            | GPLoc Bool Unique
 
 data SymbolTable = SymTab
     { _labelNames :: LabelMap String
@@ -69,3 +63,37 @@ askVarNameM       = askSymTabM lookupVarName
 askVarTypeM       = askSymTabM lookupVarType
 askFuncTableM     = askSymTabM lookupFuncTable
 askMemLocM        = askSymTabM lookupMemLoc
+
+--------------------------------------------------------------------------------------
+--
+-- IsMap instance for Data.Map to make life easier
+--
+--------------------------------------------------------------------------------------
+
+instance Ord k => IsMap (M.Map k) where
+    type KeyOf (M.Map k) = k
+    mapNull              = M.null
+    mapSize              = M.size
+    mapMember            = M.member
+    mapLookup            = M.lookup
+    mapFindWithDefault   = M.findWithDefault
+    mapEmpty             = M.empty
+    mapSingleton         = M.singleton
+    mapInsert            = M.insert
+    mapInsertWith        = M.insertWith
+    mapDelete            = M.delete
+    mapUnion             = M.union
+    mapUnionWithKey      = M.unionWithKey
+    mapDifference        = M.difference
+    mapIntersection      = M.intersection
+    mapIsSubmapOf        = M.isSubmapOf
+    mapMap               = M.map
+    mapMapWithKey        = M.mapWithKey
+    mapFold              = M.foldr
+    mapFoldWithKey       = M.foldrWithKey
+    mapFilter            = M.filter
+    mapElems             = M.elems
+    mapKeys              = M.keys
+    mapToList            = M.toList
+    mapFromList          = M.fromList
+    mapFromListWith      = M.fromListWith

@@ -35,7 +35,7 @@ data Reg
      | RegSP
      | RegRA
      | RegFP
-     deriving (Eq, Ord, Show, Typeable, Data, Lift)
+     deriving (Eq, Ord, Enum, Bounded, Show, Typeable, Data, Lift)
 
 -- | An association list of register indices to names, matching the 'Reg' data type.
 regNumList :: [(Int, Reg)]

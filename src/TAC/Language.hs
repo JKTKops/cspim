@@ -6,7 +6,11 @@ module TAC.Language
     ) where
 
 import Compiler.Hoopl
+import MIPS.Language (Reg, FReg)
 import Control.Lens.TH
+
+import Data.Int
+import qualified Data.Map as M
 
 type Name = Unique
 
@@ -156,6 +160,14 @@ sllAlignment ty = let s = sizeof ty
     if s `mod` (2 ^ t) == 0
     then Just t else Nothing
 
+-- | Takes a value to align and an alignment. Returns the smallest value greater
+--   than the value to align which is divisible by alignment.
+alignOffset :: Integral a => a -> a -> a
+alignOffset v a =
+  if v `mod` a == 0
+  then v
+  else v + a - (v `mod` a)
+
 data TacGraph = TacGraph
     { _graph :: Graph Insn C C
     , _entry :: Label
@@ -164,11 +176,26 @@ makeLenses ''TacGraph
 
 type TacBlock = Block Insn C C
 
+data MemLoc = OffsetLoc Int32
+            | RegLoc Reg
+            | FRegLoc FReg
+            -- TODO:
+            -- this turns into .extern <name>_<unique> <sizeof(typeof(unique))> if true (global)
+            -- otherwise into  .lcomm <name>_<unique> <sizeof(typeof(unique))>
+            | GPLoc Bool Unique
+
 data Function = Fn
-     { _name   :: Name
-     , _args   :: [Name]
-     , _locals :: [Name] -- this includes temporary variables generated during tacifier
-     , _body   :: TacGraph
+     { _name       :: Name
+     , _args       :: [Name]
+     , _locals     :: [Name] -- this includes temporary variables generated during tacifier
+     , _stackFrame :: StackFrame
+     , _body       :: TacGraph
+     }
+
+data StackFrame = StackFrame
+     { _size           :: Int32
+     , _savedRegisters :: M.Map Reg MemLoc
      }
 
 makeLenses ''Function
+makeLenses ''StackFrame
