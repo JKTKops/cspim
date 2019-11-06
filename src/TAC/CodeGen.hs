@@ -164,10 +164,10 @@ assignConstToVar :: MemLoc -> Type -> Constant -> CodeGen ()
 assignConstToVar vloc vtype const
     | isIntTy vtype = case vloc of
           (OffsetLoc off) -> emit
-                      [mips| li ${compilerTemp1}, !{intValueOfConst const}
+                      [mips| add ${compilerTemp1}, $0, !{intValueOfConst const}
                              sw ${compilerTemp1}, !{off}($fp)
                            |]
-          (RegLoc reg) -> emit [mips| li ${reg}, !{intValueOfConst const} |]
+          (RegLoc reg) -> emit [mips| add ${reg}, $0, !{intValueOfConst const} |]
 
 -- | Generates assembly for the (LIxArr n ix := RValue) case.
 assignToArr :: Name -> Var -> RValue -> CodeGen ()
@@ -263,52 +263,3 @@ askMemLoc = askCodeGen "allocation table" askMemLocM
 
 askMemLocType :: Unique -> CodeGen (MemLoc, Type)
 askMemLocType uniq = (,) <$> askMemLoc uniq Prelude.<*> askVarType uniq
-
---------------------------------------------------------------------------------------
---
--- Breaking the program down to initiate code generation
-
--- Much of this is copied or inspired by ghc/compiler/cmmUtils which provides the
--- toBlockListEntryFirstFalseFallthrough function used by the LLVM code generator.
---
---------------------------------------------------------------------------------------
-
--- | Get the body out of a C/C graph.
-toBlockMap :: TacGraph -> Body Insn -- Body Insn ~ LabelMap (TacBlock)
-toBlockMap TacGraph{_graph = GMany NothingO bodyMap NothingO} = bodyMap
--- There are no other cases because we know the graph is C/C.
-
--- | Gets a list of all the blocks in a TacGraph. No promises are made about order.
-toBlockList :: TacGraph -> [TacBlock]
-toBlockList g = mapElems $ toBlockMap g
-
--- | Like 'toBlockList', but the entry block always comes first.
-toBlockListEntryFirst :: TacGraph -> [TacBlock]
-toBlockListEntryFirst g
-  | mapNull m = []
-  | otherwise = entry_block : others
-  where
-    m = toBlockMap g
-    entry_id = _entry g
-    Just entry_block = mapLookup entry_id m
-    others = filter ((/= entry_id) . entryLabel) (mapElems m)
-
--- | Like 'toBlockListEntryFirst', but we order the blocks so that the true case
--- of a conditional branches to the next block in the output list of blocks.
--- This lets us avoid emitting jump instructions for the true case!
--- Note that we are relying on the order of successors returned for IfGoto by the
--- NonLocal instance of Insn (defined in TAC/Language.hs) which is [f, t].
-toBlockListEntryFirstTrueFallthrough :: TacGraph -> [TacBlock]
-toBlockListEntryFirstTrueFallthrough g@TacGraph{_entry = entLbl} =
-    postorder_dfs_from (toBlockMap g) entLbl
-
-type BlockInsns = (Insn C O, [Insn O O], Insn O C)
-
-insnsInBlock :: TacBlock -> BlockInsns
-insnsInBlock blk =
-    let (hd, tl) = blockSplitHead blk
-        (middle, end) = blockSplitTail tl
-    in (hd, blockToList middle, end)
-
-insnsInFunction :: Function -> [BlockInsns]
-insnsInFunction Fn{_body = g} = map insnsInBlock $ toBlockListEntryFirstTrueFallthrough g

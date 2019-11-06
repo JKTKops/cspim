@@ -16,6 +16,7 @@ data Program = Prog
      { _functions   :: [Function]
      , _constants   :: [Constant] -- We'll put integer constants if we find them
                                   -- but constant prop will remove them eventually
+                                  -- This info isn't complete and requires a label
      , _globalVars  :: [Name]
      , _symbolTable :: SymbolTable
      }

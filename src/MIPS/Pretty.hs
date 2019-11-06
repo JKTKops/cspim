@@ -2,6 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 module MIPS.Pretty (pretty) where
 
+import qualified Pretty as P
 import MIPS.Language
 import MIPS.PrettyTH
 
@@ -120,3 +121,9 @@ instance Pretty MipsDeclaration where
     ppr (MDirective directive) = ppr directive
     ppr (MLabel label) = text label <> text ":"
     ppr (MInst mi) = indent 4 $ ppr mi
+
+instance P.Pretty Reg             where pretty = MIPS.Pretty.pretty
+instance P.Pretty FReg            where pretty = MIPS.Pretty.pretty
+instance P.Pretty MipsLine        where pretty = MIPS.Pretty.pretty
+instance P.Pretty MipsInstruction where pretty = MIPS.Pretty.pretty
+instance P.Pretty MipsDeclaration where pretty = MIPS.Pretty.pretty
