@@ -19,6 +19,9 @@ extra-source-files:
 # common to point users to the README.md file.
 description:         Please see the README on GitHub at <https://github.com/JKTKops/cspim#readme>
 
+default-extensions:
+- ApplicativeDo
+
 dependencies:
 - base >= 4.7 && < 5
 
@@ -31,6 +34,7 @@ library:
   - hoopl
   - lens
   - mtl
+  - monad-validate
   - parsec
   - pretty
   - template-haskell

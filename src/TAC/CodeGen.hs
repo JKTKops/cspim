@@ -14,6 +14,7 @@ import Compiler.SymbolTable
 import MIPS.Language as Mips hiding (Label)
 import MIPS.Parser (mips)
 
+import Data.DList hiding (toList, fromList) -- imported from IsList already
 import Data.Function ((&))
 import Data.WordUtils
 
@@ -28,29 +29,6 @@ mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
         Left err      -> Left err
         Right (_, dl) -> Right $ toList dl
 
---------------------------------------------------------------------------------------
---
--- Difference Lists for efficient appending during emission
---
---------------------------------------------------------------------------------------
-
-newtype DiffList a = DL { unDL :: [a] -> [a] }
-
-instance IsList (DiffList a) where
-    type Item (DiffList a) = a
-    fromList l = DL $ \tail -> l ++ tail
-    toList (DL f) = f []
-
-instance Semigroup (DiffList a) where
-    DL f <> DL g = DL (f . g)
-
-instance Monoid (DiffList a) where
-    mappend = (<>)
-    mempty  = DL id
-
-instance Show a => Show (DiffList a) where
-    show (DL xs ) = "DL " ++ show (xs [])
-
 data CGError = UniqueNotInMap String Unique
              | Panic String
 
@@ -59,9 +37,9 @@ instance Show CGError where
         "Unique " ++ show u ++ " could not be found in symbol table: " ++ mapName ++ "."
     show (Panic s) = s
 
-newtype CodeGen a = CG { unCG :: ExceptT CGError (RWS SymbolTable (DiffList MipsLine) ()) a }
+newtype CodeGen a = CG { unCG :: ExceptT CGError (RWS SymbolTable (DList MipsLine) ()) a }
   deriving ( Functor, Applicative, Monad, MonadError CGError
-           , MonadReader SymbolTable, MonadWriter (DiffList MipsLine))
+           , MonadReader SymbolTable, MonadWriter (DList MipsLine))
 
 unwrapCodeGen :: CodeGen a -> SymbolTable -> Either CGError (a, [MipsLine])
 unwrapCodeGen (CG erws) symtab =
@@ -71,7 +49,7 @@ unwrapCodeGen (CG erws) symtab =
         Left err  -> Left err
         Right val -> Right (val, toList w)
 
-emit :: DiffList MipsLine -> CodeGen ()
+emit :: DList MipsLine -> CodeGen ()
 emit = tell
 
 panic :: String -> CodeGen a

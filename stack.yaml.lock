@@ -11,6 +11,13 @@ packages:
       sha256: 08339d61c1955f5c2d3ed509d083304a02dd5db34f461bc7c329e93d3cbdb54c
   original:
     hackage: hoopl-3.10.2.2@sha256:ddd36c30f166b179173502ef6f8179f96f59671442060b61f6716ff825f9d748,3317
+- completed:
+    hackage: monad-validate-1.2.0.0@sha256:9850f408431098b28806dd464b6825a88a0b56c84f380d7fe0454c1df9d6f881,3505
+    pantry-tree:
+      size: 713
+      sha256: 8e049bd12ce2bd470909578f2ee8eb80b89d5ff88860afa30e29dd4eafecfa3e
+  original:
+    hackage: monad-validate-1.2.0.0@sha256:9850f408431098b28806dd464b6825a88a0b56c84f380d7fe0454c1df9d6f881,3505
 snapshots:
 - completed:
     size: 499889
