@@ -38,26 +38,25 @@ withTheseC f m = runMonadCompiler m >>= f
 --   A common idiom is presumed to be 'handleC' error warn ok where ...
 handleC :: FullMonadCompiler m
         => (DList CErr -> m b)
-        -> ((DList CErr, a) -> m b)
+        -> (DList CErr -> a -> m b)
         -> (a -> m b)
         -> m a
         -> m b
 handleC this these that = withTheseC $ \case
     This e -> this e
     That a -> that a
-    These e a -> these (e, a)
+    These e a -> these e a
 
 -- | Takes a compiler action and causes any warnings it emits to become fatal errors.
 werrorC :: FullMonadCompiler m => m a -> m a
 werrorC = handleC error warn ok
   where error = compilerErrors
-        warn (e, _) = compilerErrors e
+        warn e _ = compilerErrors e
         ok = return
 
 -- | Takes a compiler action and ignores any warnings it emits.
 unwarnC :: FullMonadCompiler m => m a -> m a
 unwarnC = handleC error warn ok
   where error = compilerErrors
-        warn (_, a) = return a
+        warn _ a = return a
         ok = return
-
