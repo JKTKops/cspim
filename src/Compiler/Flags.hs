@@ -1,5 +1,6 @@
 module Compiler.Flags where
 
+import Data.Data
 import qualified Data.Set as S
 
 data Flag
@@ -7,6 +8,10 @@ data Flag
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 newtype Flags = Flags { getFlags :: S.Set Flag }
+  deriving Show
+
+noFlags :: Flags
+noFlags = Flags S.empty
 
 isFlagSet :: Flag -> Flags -> Bool
 isFlagSet flag (Flags flags) = S.member flag flags

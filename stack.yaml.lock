@@ -5,12 +5,26 @@
 
 packages:
 - completed:
-    hackage: hoopl-3.10.2.2@sha256:ddd36c30f166b179173502ef6f8179f96f59671442060b61f6716ff825f9d748,3317
+    hackage: ansi-terminal-0.10.1@sha256:a2965c59699939822a5a78650d50d36131391262adadeb3ff88ba5bd2ee5b269,3226
     pantry-tree:
-      size: 1711
-      sha256: 08339d61c1955f5c2d3ed509d083304a02dd5db34f461bc7c329e93d3cbdb54c
+      size: 1461
+      sha256: 274845104b8a01ae6fae022309708b59a1fdf3a652ee41fe4eeb585a76032fe7
   original:
-    hackage: hoopl-3.10.2.2@sha256:ddd36c30f166b179173502ef6f8179f96f59671442060b61f6716ff825f9d748,3317
+    hackage: ansi-terminal-0.10.1@sha256:a2965c59699939822a5a78650d50d36131391262adadeb3ff88ba5bd2ee5b269,3226
+- completed:
+    cabal-file:
+      size: 4757
+      sha256: e13ed83c80b6e24e036658c42e941e43f93ec197414b888edbbcedb3a919313a
+    name: hoopl
+    version: 3.10.2.3
+    git: https://github.com/haskell/hoopl.git
+    pantry-tree:
+      size: 4980
+      sha256: 833a6138a5504236077eebe337da6bc3c6596658ebb4d6c90f107581e5a6dfa5
+    commit: 89dde6af5b2fadfad726412c00a1ab01d34fd2a0
+  original:
+    git: https://github.com/haskell/hoopl.git
+    commit: 89dde6af5b2fadfad726412c00a1ab01d34fd2a0
 - completed:
     hackage: monad-validate-1.2.0.0@sha256:9850f408431098b28806dd464b6825a88a0b56c84f380d7fe0454c1df9d6f881,3505
     pantry-tree:

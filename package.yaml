@@ -28,6 +28,7 @@ dependencies:
 library:
   source-dirs:           src/
   dependencies:
+  - ansi-terminal >= 0.9
   - array
   - containers
   - filepath
@@ -51,7 +52,6 @@ executables:
     - -O2
     dependencies:
     - cspim
-    - cmdargs
 
 tests:
   cspim-test:

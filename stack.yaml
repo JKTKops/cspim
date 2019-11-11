@@ -35,7 +35,9 @@ packages:
 # forks / in-progress versions pinned to a git hash. For example:
 #
 extra-deps:
-- hoopl-3.10.2.2@sha256:ddd36c30f166b179173502ef6f8179f96f59671442060b61f6716ff825f9d748,3317
+- ansi-terminal-0.10.1@sha256:a2965c59699939822a5a78650d50d36131391262adadeb3ff88ba5bd2ee5b269,3226
+- git: https://github.com/haskell/hoopl.git
+  commit: 89dde6af5b2fadfad726412c00a1ab01d34fd2a0
 - monad-validate-1.2.0.0@sha256:9850f408431098b28806dd464b6825a88a0b56c84f380d7fe0454c1df9d6f881,3505
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git
@@ -44,7 +46,7 @@ extra-deps:
 # extra-deps: []
 
 # Override default flag values for local packages and extra-deps
-# flags: {}
+# flags:
 
 # Extra package databases containing global packages
 # extra-package-dbs: []
