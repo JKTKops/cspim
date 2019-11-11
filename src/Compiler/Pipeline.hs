@@ -40,17 +40,20 @@ compile opts filename =
 runPipeline :: Options -> Phase -> FilePath -> IO ()
 runPipeline opts phase fname = do
     source <- readFile fname
-    let result = runCompiler (pipeline [phase .. CPhase] fname source) (opts^.flags)
+    let result = runCompiler (compileAction source) (opts^.flags)
         outFile = fromMaybe (dropExtension fname <.> "s") (opts^.outputFile)
     case result of
         This err    -> exitWithCompileError err
         That result -> writeFile outFile result
+        These errs result -> do
+            printCErrs errs
+            writeFile outFile result
+
+  where compileAction = finalizeStdErrOutput . pipeline (CppPhase, OutPhase) fname
 
 exitWithCompileError :: [CErr] -> IO ()
 exitWithCompileError errs = do
-    let warnings = filter isWarning errs
-        errors   = filter isError   errs
-    mapM_ (putStrLn . pretty) (warnings ++ errors)
+    printCErrs errs
     exitWith $ ExitFailure 1
 
 --------------------------------------------------------------------------------------
@@ -66,7 +69,7 @@ tempAdjustedCodeGenProc (Left e) =
         ++ show e
 tempAdjustedCodeGenProc (Right v) = return v
 
-pipeline :: [Phase] -> FilePath -> String -> Compiler String
-pipeline _ fname = parseC fname
+pipeline :: (Phase, Phase) -> FilePath -> String -> Compiler String
+pipeline _ fname = (\str -> verboseLog "Starting parse" *> parseC fname str <* verboseLog "Done parsing")
                >=> tempAdjustedCodeGenProc . mipsCodeGenProc
                >=> return . MIPS.pretty

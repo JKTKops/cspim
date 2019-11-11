@@ -1,9 +1,10 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
 module Compiler.Monad
     ( module Compiler.Monad.Class
     , module Compiler.Monad
-    )where
+    ) where
 
 import Compiler.Monad.Class hiding (runCompilerMonad)
 import qualified Compiler.Monad.Class as FMC
@@ -11,9 +12,11 @@ import qualified Compiler.Monad.Class as FMC
 import Compiler.Flags
 import Compiler.Error
 
+import Data.List (partition)
 import Data.DList
+import Data.Foldable (traverse_)
 import Data.Function ((&))
-import Data.Functor ((<&>))
+import Data.Functor ((<&>), ($>))
 import Data.Bifunctor
 
 import Control.Monad.Reader
@@ -59,4 +62,55 @@ unwarnC :: FullMonadCompiler m => m a -> m a
 unwarnC = handleC error warn ok
   where error = compilerErrors
         warn _ a = return a
+        ok = return
+
+warnToErrorIf :: (forall e. CompileError e => e -> Bool) -> DList CErr -> Compiler ()
+warnToErrorIf p ws = modifyCErrs2 errs warns $ toList ws
+  where errs = const NoChange
+
+        warns :: CompileError e => e -> CEAction -- type annotation is necessary
+        warns e = if p e then W2Error else NoChange
+
+modifyWarnings :: (forall e. CompileError e => e -> CEAction) -> [CErr] -> Compiler ()
+modifyWarnings = modifyCErrs2 (const NoChange)
+
+modifyErrors :: (forall e. CompileError e => e -> CEAction) -> [CErr] -> Compiler ()
+modifyErrors act = modifyCErrs2 act (const NoChange)
+
+-- | Given a list of 'CErrs', create a compiler action that throws them all.
+--   Verbosity logs are always rethrown as verbosity logs, but warnings and errors
+--   will be rethrown according to the action returned by the callback.
+--
+--   That is, 'Ignore' will /not/ rethrow the error, but 'NoChange' will.
+modifyCErrs :: (forall e. CompileError e => e -> CEAction) -> [CErr] -> Compiler ()
+modifyCErrs callback = modifyCErrs2 callback callback
+
+-- | Like 'modifyCErrs', but takes separate callbacks for errors and warnings.
+--
+--   Can be used to distinguish between 'CErr's further than allowed by W2Error and E2Warning.
+--   For example, you can 'Ignore' warnings, but send 'NoChange' for errors of the same type.
+modifyCErrs2 :: (forall e. CompileError e => e -> CEAction) -- ^ with errors
+             -> (forall e. CompileError e => e -> CEAction) -- ^ with warnings
+             -> [CErr]
+             -> Compiler ()
+modifyCErrs2 pe pw = traverse_ adjustCErr
+  where adjustCErr :: CErr -> Compiler ()
+        adjustCErr v@(CErr VerboseLog _) = rethrowCErr v
+        adjustCErr (CErr Warning w) = case pw w of
+            W2Error -> compilerError w
+            Ignore  -> return ()
+            _       -> compilerWarning w
+        adjustCErr (CErr Error e) = case pe e of
+            E2Warning -> compilerWarning e
+            Ignore    -> return ()
+            _         -> compilerError e
+
+finalizeStdErrOutput :: Compiler a -> Compiler a
+finalizeStdErrOutput c = do
+    flags <- compilerFlags
+    if Verbose `isFlagSet` flags
+    then c
+    else handleC error warn ok c
+  where error es  = compilerErrors  $ fromList $ removeVerboseLogs $ toList es
+        warn ws a = compilerWarnings (fromList $ removeVerboseLogs $ toList ws) $> a
         ok = return

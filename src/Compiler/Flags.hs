@@ -4,7 +4,8 @@ import Data.Data
 import qualified Data.Set as S
 
 data Flag
-     = FDeferOutOfScopeErrors
+     = Verbose
+     | FDeferOutOfScopeErrors
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 newtype Flags = Flags { getFlags :: S.Set Flag }
