@@ -12,10 +12,8 @@ import System.Console.ANSI
 -- | Things which the compiler can omit as errors or warnings
 class Pretty e => CompileError e where
     -- | Check if a given flag should turn this error from a warning to an error
-    --   or vice versa. CompileError may safely assume that returning an action
-    --   here /will/ cause that action to be executed, if it affects their pretty instance.
+    --   or vice versa.
     flagAffects :: Flag -> e -> CEAction
-
 
 data CEAction = W2Error | E2Warning | Ignore | NoChange deriving (Eq, Show)
 
@@ -29,6 +27,12 @@ newtype VerboseLog = VL { getLog :: String }
 instance Pretty VerboseLog where
     pretty (VL s) = s
 instance CompileError VerboseLog where
+    flagAffects _ _ = NoChange
+
+newtype PanicErr = Panic String
+instance Pretty PanicErr where
+    pretty (Panic s) = "Panic! " ++ s
+instance CompileError PanicErr where
     flagAffects _ _ = NoChange
 
 -- | Construct a CErr without specifying a warning/error type.
@@ -70,3 +74,8 @@ prettyColoredCErr = \case
 
 printCErrs :: [CErr] -> IO ()
 printCErrs = mapM_ (hPutStrLn stderr . pretty)
+
+instance Pretty ErrorType where
+    pretty VerboseLog = "verbose log"
+    pretty Warning    = "warning"
+    pretty Error      = "error"

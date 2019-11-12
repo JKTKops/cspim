@@ -9,6 +9,7 @@ module Compiler.Monad
 import Compiler.Monad.Class hiding (runCompilerMonad)
 import qualified Compiler.Monad.Class as FMC
 
+import Pretty
 import Compiler.Flags
 import Compiler.Error
 
@@ -96,21 +97,35 @@ modifyCErrs2 :: (forall e. CompileError e => e -> CEAction) -- ^ with errors
 modifyCErrs2 pe pw = traverse_ adjustCErr
   where adjustCErr :: CErr -> Compiler ()
         adjustCErr v@(CErr VerboseLog _) = rethrowCErr v
-        adjustCErr (CErr Warning w) = case pw w of
-            W2Error -> compilerError w
-            Ignore  -> return ()
+        adjustCErr c@(CErr Warning w) = case pw w of
+            W2Error -> verboseLogAction c W2Error *> compilerError w
+            Ignore  -> verboseLogAction c Ignore  $> ()
             _       -> compilerWarning w
-        adjustCErr (CErr Error e) = case pe e of
-            E2Warning -> compilerWarning e
-            Ignore    -> return ()
+        adjustCErr c@(CErr Error e) = case pe e of
+            E2Warning -> verboseLogAction c E2Warning *> compilerWarning e
+            Ignore    -> verboseLogAction c Ignore    $> ()
             _         -> compilerError e
 
+rethrowCErrs :: DList CErr -> Compiler ()
+rethrowCErrs = traverse_ rethrowCErr . toList
+
+verboseLogAction :: CErr -> CEAction -> Compiler ()
+verboseLogAction _ NoChange = return ()
+verboseLogAction (CErr t e) Ignore = verboseLog $ "Ignoring " ++ pretty t ++ ": " ++ pretty e
+verboseLogAction (CErr Warning e) W2Error = verboseLog $ "Warning to error: " ++ pretty e
+verboseLogAction _ W2Error = return ()
+verboseLogAction (CErr Error e) E2Warning = verboseLog $ "Error to warning: " ++ pretty e
+verboseLogAction _ E2Warning = return ()
+
+-- | If the verbosity flag is not set, clean verbosity logs from the output.
 finalizeStdErrOutput :: Compiler a -> Compiler a
 finalizeStdErrOutput c = do
     flags <- compilerFlags
     if Verbose `isFlagSet` flags
     then c
     else handleC error warn ok c
-  where error es  = compilerErrors  $ fromList $ removeVerboseLogs $ toList es
-        warn ws a = compilerWarnings (fromList $ removeVerboseLogs $ toList ws) $> a
+        -- This is safe because verbose logs are launched with dispute, meaning
+        -- if we even reach this case, there must've been a non-verbose log error via refute.
+  where error es  = rethrowCErrs (fromList $ removeVerboseLogs $ toList es) $> undefined
+        warn ws a = rethrowCErrs (fromList $ removeVerboseLogs $ toList ws) $> a
         ok = return

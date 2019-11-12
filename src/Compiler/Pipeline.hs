@@ -64,7 +64,7 @@ exitWithCompileError errs = do
 
 tempAdjustedCodeGenProc :: Show e => Either e [MIPS.MipsLine] -> Compiler [MIPS.MipsLine]
 tempAdjustedCodeGenProc (Left e) =
-    error $ "cspim internal temporary hack, file a bug! \
+    panic $ "cspim internal temporary hack, file a bug! \
             \This error was produced and not handled:\n"
         ++ show e
 tempAdjustedCodeGenProc (Right v) = return v
