@@ -62,14 +62,7 @@ exitWithCompileError errs = do
 -- This is still an early version; phase handling and compositionality is a future goal.
 --------------------------------------------------------------------------------------
 
-tempAdjustedCodeGenProc :: Show e => Either e [MIPS.MipsLine] -> Compiler [MIPS.MipsLine]
-tempAdjustedCodeGenProc (Left e) =
-    panic $ "cspim internal temporary hack, file a bug! \
-            \This error was produced and not handled:\n"
-        ++ show e
-tempAdjustedCodeGenProc (Right v) = return v
-
 pipeline :: (Phase, Phase) -> FilePath -> String -> Compiler String
-pipeline _ fname = (\str -> verboseLog "Starting parse" *> parseC fname str <* verboseLog "Done parsing")
-               >=> tempAdjustedCodeGenProc . mipsCodeGenProc
+pipeline _ fname = parseC fname
+               >=> mipsCodeGenProc
                >=> return . MIPS.pretty

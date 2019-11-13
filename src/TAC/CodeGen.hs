@@ -9,8 +9,12 @@ module TAC.CodeGen where
 
 import GHC.Exts (IsList (..))
 
+import Pretty
 import TAC.Program as Tac
+
+import Compiler.Monad
 import Compiler.SymbolTable
+
 import MIPS.Language as Mips hiding (Label)
 import MIPS.Parser (mips)
 
@@ -18,42 +22,30 @@ import Data.DList hiding (toList, fromList) -- imported from IsList already
 import Data.Function ((&))
 import Data.WordUtils
 
-import Control.Monad.Except
 import Control.Monad.RWS.Strict
 
-mipsCodeGenProc :: Program -> Either CGError [MipsLine]
+mipsCodeGenProc :: Program -> Compiler [MipsLine]
 mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
     let action = do -- written this way to make it easier to add constants and globalVars later
             mapM_ codeGenFunction fns
-    in case unwrapCodeGen action symtab of
-        Left err      -> Left err
-        Right (_, dl) -> Right $ toList dl
+    in snd <$> unwrapCodeGen action symtab
 
-data CGError = UniqueNotInMap String Unique
-             | Panic String
+data CGError = UniqueNotInMap String Unique deriving Show
 
-instance Show CGError where
-    show (UniqueNotInMap mapName u) =
+instance Pretty CGError where
+    pretty (UniqueNotInMap mapName u) =
         "Unique " ++ show u ++ " could not be found in symbol table: " ++ mapName ++ "."
-    show (Panic s) = s
 
-newtype CodeGen a = CG { unCG :: ExceptT CGError (RWS SymbolTable (DList MipsLine) ()) a }
-  deriving ( Functor, Applicative, Monad, MonadError CGError
+newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) () Compiler) a }
+  deriving ( Functor, Applicative, Monad, MonadCompiler
            , MonadReader SymbolTable, MonadWriter (DList MipsLine))
 
-unwrapCodeGen :: CodeGen a -> SymbolTable -> Either CGError (a, [MipsLine])
+unwrapCodeGen :: CodeGen a -> SymbolTable -> Compiler (a, [MipsLine])
 unwrapCodeGen (CG erws) symtab =
-    let f = runExceptT erws & runRWS
-        (a, _, w) = f symtab ()
-    in case a of
-        Left err  -> Left err
-        Right val -> Right (val, toList w)
+    runRWST erws symtab () >>= \(a, _, w) -> return (a, toList w)
 
 emit :: DList MipsLine -> CodeGen ()
 emit = tell
-
-panic :: String -> CodeGen a
-panic = throwError . Panic
 
 --------------------------------------------------------------------------------------
 --
@@ -214,7 +206,7 @@ askCodeGen :: SymTabKey k => String -> AskSymTabM k v -> k -> CodeGen v
 askCodeGen n req key = do
     mv <- req key
     case mv of
-        Nothing -> throwError $ notFound n key
+        Nothing -> panic $ pretty $ notFound n key
         Just v  -> return v
 
 {-
