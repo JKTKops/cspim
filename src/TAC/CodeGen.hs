@@ -41,8 +41,8 @@ newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) () Compiler)
            , MonadReader SymbolTable, MonadWriter (DList MipsLine))
 
 unwrapCodeGen :: CodeGen a -> SymbolTable -> Compiler (a, [MipsLine])
-unwrapCodeGen (CG erws) symtab =
-    runRWST erws symtab () >>= \(a, _, w) -> return (a, toList w)
+unwrapCodeGen (CG rwst) symtab =
+    runRWST rwst symtab () >>= \(a, _, w) -> return (a, toList w)
 
 emit :: DList MipsLine -> CodeGen ()
 emit = tell
