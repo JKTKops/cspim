@@ -17,10 +17,9 @@ import Compiler.Flags
 import Compiler.Monad
 import Compiler.SymbolTable
 
-import Text.Parsec (getState, putState, ParsecT, ParseError)
+import qualified Parser.Lexer as L
+import Text.Parsec (between, getState, putState, ParsecT, ParseError)
 import qualified Text.Parsec as P
-import qualified Text.Parsec.Language as L
-import qualified Text.Parsec.Token as T
 
 import qualified Data.Map as M
 
@@ -36,9 +35,6 @@ import Control.Lens.TH
 import Control.Lens hiding (assign)
 import Control.Lens.Utils
 
-
-import Control.Monad.Debug
-
 newtype Parser a = P { unP :: ParsecT
                                 String
                                 ParserState
@@ -47,7 +43,6 @@ newtype Parser a = P { unP :: ParsecT
   deriving (Functor, Applicative, Alternative, Monad, MonadFail, MonadCompiler)
 
 instance Pretty ParseError where pretty = show
-    -- TODO: Switch to parsec and make the space consumer read preprocessor srcpos output
 
 instance CompileError ParseError where
     flagAffects _ _ = NoChange
@@ -74,94 +69,44 @@ data ParserState = PS
 
 makeLenses ''ParserState
 
+runParser :: Parser a -> P.SourceName -> String -> Compiler a
+runParser p fname src = do
+    res <- P.runParserT (unP p) emptyParserState fname src
+    case res of
+        Left err   -> compilerError err
+        Right prog -> return prog
+
+
 emptyParserState :: ParserState
 emptyParserState = PS mapEmpty mapEmpty [] Nothing emptyTable [] [1..]
 
-cStyle :: Monad m => T.GenLanguageDef String st m
-cStyle = T.LanguageDef
-  { T.commentStart    = "/*"
-  , T.commentEnd      = "*/"
-  , T.commentLine     = "//"
-  , T.nestedComments  = False
-  , T.identStart      = P.letter
-  , T.identLetter     = P.alphaNum <|> P.oneOf "_'"
-  , T.opStart         = T.opLetter cStyle
-  , T.opLetter        = P.oneOf "+-*/%<>!~^=&|"
-  , T.reservedNames   = cReservedWords
-  , T.reservedOpNames = cOps
-  , T.caseSensitive   = True
-  }
-  where
-    cReservedWords =
-        [ -- control flow
-          "if", "else" , "do", "while", "for"
-        , "break", "continue", "goto"
-        , "switch", "case", "default"
-        , "return"
+parens, braces, brackets, angles :: Parser a -> Parser a
+parens   = P . between (L.symbol "(") (L.symbol ")") . unP
+braces   = P . between (L.symbol "{") (L.symbol "}") . unP
+brackets = P . between (L.symbol "[") (L.symbol "]") . unP
+angles   = P . between (L.symbol "<") (L.symbol ">") . unP
 
-        -- enabling external/global names
-        , "extern", "static"
-
-        -- The fabled register keyword
-        , "register"
-
-        -- Compile-time keywords
-        , "sizeof", "alignof"
-
-        -- types
-        , "char", "short", "int", "long"
-        , "float", "double", "void", "unsigned"
-        , "typedef", "struct", "union", "enum"
-        ]
-    cOps =
-        [ "+", "*", "/", "%", "-", "<<", ">>"
-        , "&", "&&", "|", "||", "^", "~", "!"
-        , "++", "--"
-        , ">", ">=", "<=", "<", "==", "!="
-        , "=", "+=", "-=", "*=", "/=", "%="
-        , ">>=", "<<=", "&=", "|=", "^="
-        ]
-
-tokP :: Monad m => T.GenTokenParser String st m
-tokP = T.makeTokenParser cStyle
-
-reserved, reservedOp :: String -> Parser ()
-reserved   = P . T.reserved   tokP
-reservedOp = P . T.reservedOp tokP
-
-identifier, operator :: Parser String
-identifier = P $ T.identifier tokP
-operator   = P $ T.operator   tokP
-
-charLiteral :: Parser Char
-charLiteral = P $ T.charLiteral tokP
-
-stringLiteral :: Parser String
-stringLiteral = P $ T.stringLiteral tokP
+symbol :: String -> Parser String
+symbol = P . L.symbol
 
 natural :: Parser Integer
-natural = P $ T.natural tokP
+natural = P L.natural
 
 float :: Parser Double
-float = P $ T.float tokP
+float = P L.float
 
-naturalOrFloat :: Parser (Either Integer Double)
-naturalOrFloat = P $ T.naturalOrFloat tokP
+dot, semi :: Parser ()
+dot = P L.dot
+semi = P L.semi
 
-whitespace :: Parser ()
-whitespace = P $ T.whiteSpace tokP
+reserved :: String -> Parser ()
+reserved = P . L.reserved
 
-parens, braces, angles, brackets :: Parser a -> Parser a
-parens = P . T.parens tokP . unP
-braces = P . T.braces tokP . unP
-angles = P . T.angles tokP . unP
-brackets = P . T.brackets tokP . unP
+identifier :: Parser String
+identifier = P L.identifier
 
-semi, comma, colon, dot :: Parser String
-semi  = P $ T.semi  tokP
-comma = P $ T.comma tokP
-colon = P $ T.colon tokP
-dot   = P $ T.dot   tokP
+reservedOp :: String -> Parser ()
+reservedOp = P . L.reservedOp
 
 many, many1 :: Parser a -> Parser [a]
 many = P . P.many . unP
@@ -191,15 +136,11 @@ parseC fname src =
         -- and want to decide if we should turn them into errors.
         -- So we reverse the logic and reverse the adjustment.
         reverse E2Warning = W2Error
-        reverse act       = act
+        reverse W2Error   = E2Warning -- future proofing
 
         ok = return
 
-        parse = do
-            res <- P.runParserT (unP startParser) emptyParserState fname src
-            case res of
-                Left err   -> compilerError err
-                Right prog -> return prog
+        parse = runParser startParser fname src
 
 startParser :: Parser Program
 startParser = mainFunction
@@ -347,10 +288,6 @@ uniqueOf name = do
             customParseWarning $ VariableNotInScope name
             freshUnique
 
-  where firstJust :: [Maybe a] -> Maybe a
-        firstJust (Just x : _) = Just x
-        firstJust (Nothing:ms) = firstJust ms
-
 searchLocalVarStack :: String -> [NameMap] -> Maybe Unique
 searchLocalVarStack _ [] = Nothing
 searchLocalVarStack name (m:ms) = case mapLookup name m of
@@ -464,3 +401,15 @@ buildStackFrame args lcls = do
                                            -- space needs to be allocated for the frame.
   where adjustOffset a (OffsetLoc o) = OffsetLoc $ a + o
         adjustOffset _ loc = loc
+
+--------------------------------------------------------------------------------------
+--
+-- Testing parsers
+--
+--------------------------------------------------------------------------------------
+
+testParser :: Show a => Parser a -> String -> IO String
+testParser p src = case flip runCompiler noFlags $ runParser p "test" src of
+   This errs -> mapM_ (putStrLn . pretty) errs >> return ""
+   These errs a -> mapM_ (putStrLn . pretty) errs >> return (show a)
+   That a -> return (show a)
