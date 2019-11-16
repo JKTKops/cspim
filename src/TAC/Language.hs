@@ -195,6 +195,7 @@ data Function = Fn
 data StackFrame = StackFrame
      { _size           :: Int32
      , _savedRegisters :: M.Map Reg MemLoc
+     , _passingTable   :: UniqueMap MemLoc -- where each argument is passed relative to this frame
      }
 
 makeLenses ''Function

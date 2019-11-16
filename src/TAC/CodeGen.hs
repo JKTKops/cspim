@@ -56,12 +56,14 @@ emit = tell
 -- NOTE [Compiler temporaries]: The compiler reserves a couple of temporaries for storing
 -- the results of MIPS operations that need to be stored to the stack.
 
+compilerAddrTemp :: Reg
 compilerTemp1,  compilerTemp2  :: Reg
 compilerFTemp1, compilerFTemp2 :: FReg -- need two registers to hold a double
-compilerTemp1  = RegT5
-compilerTemp2  = RegT6
-compilerFTemp1 = RegF12
-compilerFTemp2 = RegF13
+compilerAddrTemp = RegAT
+compilerTemp1  = RegT8
+compilerTemp2  = RegT9
+compilerFTemp1 = RegF0
+compilerFTemp2 = RegF2
 
 --------------------------------------------------------------------------------------
 --
@@ -92,6 +94,15 @@ labelCodeGen lbl = do
 --   This assembly is called the "prologue" and builds the stack frame for the function.
 enterCodeGen :: Name -> CodeGen ()
 enterCodeGen uniq = panic "enter instruction not implemented"
+
+{- NOTE: [Prologue/return sensitivity]
+
+Since the prologue and return are repsonsible for moving the frame and stack pointers around,
+we have to be careful with how the frame pointer and return address are saved (they are in the
+saved registers map of every stack frame). In particular, They must be saved before $fp is
+moved, and restored after, while other variables must be saved after $fp is moved and
+restored before.
+-}
 
 --------------------------------------------------------------------------------------
 --

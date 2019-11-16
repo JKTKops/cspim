@@ -71,11 +71,10 @@ makeLenses ''ParserState
 
 runParser :: Parser a -> P.SourceName -> String -> Compiler a
 runParser p fname src = do
-    res <- P.runParserT (unP p) emptyParserState fname src
+    res <- P.runParserT (L.whiteSpace *> unP p <* P.eof) emptyParserState fname src
     case res of
         Left err   -> compilerError err
         Right prog -> return prog
-
 
 emptyParserState :: ParserState
 emptyParserState = PS mapEmpty mapEmpty [] Nothing emptyTable [] [1..]
@@ -333,10 +332,10 @@ runAllocT :: AllocT m a -> m (a, Int32)
 runAllocT (AT action) = runStateT action 0
 
 addrFor :: Monad m => Type -> AllocT m Int32
-addrFor ty = AT $ do
+addrFor ty = (AT $ do
     current <- get
     let addr = alignOffset current 4
-    state $ const (addr, addr)
+    state $ const (addr, addr)) <* consumeType ty
 
 consumeSize :: Monad m => Int -> AllocT m ()
 consumeSize n = AT $ modify $ \s -> s + fromIntegral n
@@ -354,23 +353,26 @@ computeLocalVarAllocation vars = do
     return (lclAllocTable, totalSpace)
 
 {- |
-Computes the allocation table for a list of function arguments. Allocates the first
-up-to-4 arguments to the $a registers. Doubles and Longs will consume 2 $a registers!
-Returns an allocation table that is based at offset 0, and the total stack space
-consumed by the allocation.
+Computes the allocation table for a list of function arguments.
 
-Stack arguments are allocated in /reverse/ order, i.e., arguments further right are higher
-on the stack (and have a higher offset from $fp). The input list should be in the
-left-to-right order of the function's parameters.
+The input list should be in the left-to-right order of the function's parameters.
+
+Returns a triple of register allocated variables, stack allocated variables, and the total
+stack words consumed.
 -}
-computeArgumentVarAllocation :: [Name] -> Parser (UniqueMap MemLoc, Int32)
+computeArgumentVarAllocation :: [Name] -> Parser ([(Name, MemLoc)], [(Name, MemLoc)], Int32)
 computeArgumentVarAllocation vars = do
     let (regArgs, stackArgs) = splitAt 4 vars -- this is wrong! TODO TODO TODO TODO TODO
         -- updated TODO is to abstract this out into a memory model class
         regLocs = zip regArgs $ map RegLoc [RegA0 .. RegA3]
     (offsets, totalSpace) <- runAllocT $ computeAllocs stackArgs
     let stackLocs = zip stackArgs $ map OffsetLoc offsets
-    return (mapFromList $ regLocs ++ stackLocs, totalSpace)
+    return (regLocs, stackLocs, totalSpace)
+
+computeArgumentPassingTable :: [Name] -> Parser (UniqueMap MemLoc, Int32)
+computeArgumentPassingTable vars = do
+    (regs, stacks, size) <- computeArgumentVarAllocation vars
+    return (mapFromList regs `mapUnion` mapFromList stacks, size)
 
 computeAllocs :: [Name] -> AllocT Parser [Int32]
 computeAllocs vars = sequence $ computeAlloc <$> vars
@@ -381,24 +383,24 @@ computeAllocs vars = sequence $ computeAlloc <$> vars
                                 $ "Unique " ++ show var ++ " has not been assigned a type!"
                                ++ " (while allocating arguments)"
                 Just varTy -> pure varTy
-            startAt <- addrFor varTy
-            consumeType varTy
-            return startAt
+            addrFor varTy
 
 -- | Takes a list of arguments and a list of local variables. Allocates space for both,
 --   placing the allocations into the symbol table. Constructs a stack frame that represents
 --   the size of the frame and locations of saved registers.
 buildStackFrame :: [Name] -> [Name] -> Parser StackFrame
 buildStackFrame args lcls = do
-    (argMap, argSize) <- computeArgumentVarAllocation args
-    (lclMap, lclSize) <- computeLocalVarAllocation lcls
+    (passRegs, passStacks, argSize) <- computeArgumentVarAllocation args
+    (lclMap, lclSize) <- computeLocalVarAllocation $ lcls ++ map fst passRegs
     let endLcl = alignOffset lclSize 4
         savedRegs = mapFromList [(RegRA, OffsetLoc endLcl), (RegFP, OffsetLoc $ endLcl + 4)]
         endSaved = endLcl + 8
-        argMap' = adjustOffset endSaved <$> argMap
-    symTab.allocTable %= \m -> lclMap `mapUnion` argMap' `mapUnion` m
-    return $ StackFrame endSaved savedRegs -- the size is endSaved because that's how much
-                                           -- space needs to be allocated for the frame.
+        argMap = adjustOffset endSaved <$> mapFromList passStacks
+        passingTable = mapFromList passRegs `mapUnion` argMap
+    symTab.allocTable %= \m -> lclMap `mapUnion` argMap `mapUnion` m
+    -- the size is endSaved because that's how much
+    -- space needs to be allocated for the frame.
+    return $ StackFrame endSaved savedRegs passingTable
   where adjustOffset a (OffsetLoc o) = OffsetLoc $ a + o
         adjustOffset _ loc = loc
 

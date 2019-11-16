@@ -28,6 +28,7 @@ data Directive
 
 data Reg
      = Reg0
+     | RegAT -- ^ Use with extreme caution!
      | RegV0 | RegV1
      | RegA0 | RegA1 | RegA2 | RegA3
      | RegT0 | RegT1 | RegT2 | RegT3 | RegT4 | RegT5 | RegT6 | RegT7 | RegT8 | RegT9

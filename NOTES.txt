@@ -29,3 +29,24 @@ la $t0, name
 lw $t0, 0($t0)
 
 Free instruction save!
+
+--
+
+Computing function allocation and calling table:
+
+1) figure out how arguments are being passed
+2) separate the stack passed ones and the register passed ones
+3) allocate the register-passed ones as local variables
+4) combine local variable allocations, stack-passed argument table
+       and combine them into the allocation table
+5) combine register-passed and stack-passed arguments into an argument passing table
+6) calculate stack frame size and produce a StackFrame
+7) return (frame, callingTable)
+
+To compute how to _call_ a function, just call `computeArgumentPassingTable`
+You get back a table where offset 0 is the top of the stack and an Int32 that represents
+how much space you need.
+
+And of course, this means computeArgumentVarAllocation needs to be abstracted, presumably
+all the way out into Program (since it reads the symbol table) which means the type has to be
+:: (Has SymbolTable m) => [Name] -> m (UniqueMap MemLoc, Int32)

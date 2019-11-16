@@ -154,14 +154,15 @@ regByNumber = do
         Just reg -> return reg
 
 regByName :: Parser Reg
-regByName = regByNameZero <|> try regByNameSPRAFP <|> regByNameNumber
+regByName = regByNameZero <|> try regByNameATSPRAFP <|> regByNameNumber
 
-regByNameZero, regByNameSPRAFP, regByNameNumber :: Parser Reg
+regByNameZero, regByNameATSPRAFP, regByNameNumber :: Parser Reg
 regByNameZero = (do string "zero"; return Reg0) <|> (do char '0'; return Reg0)
 
-regByNameSPRAFP = (string "sp" $> RegSP)
-              <|> (string "ra" $> RegRA)
-              <|> (string "fp" $> RegFP)
+regByNameATSPRAFP = (string "at" $> RegAT)
+                <|> (string "sp" $> RegSP)
+                <|> (string "ra" $> RegRA)
+                <|> (string "fp" $> RegFP)
 
 regByNameNumber = do
     bank <- lower
