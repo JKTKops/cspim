@@ -161,7 +161,7 @@ mainFunction = do
     let graph = mkFirst (Label entLbl)
                 <*|*> mkMiddle (Enter main_uniq)
                 <*|*> body
-                <*|*> mkLast (Return main_uniq Nothing)
+                <*|*> mkLast (Return main_uniq)
         fn = Fn { _name = main_uniq, _args = []
                 , _locals = main_lcls, _stackFrame = stackFrame
                 , _body = TacGraph graph entLbl
@@ -174,17 +174,31 @@ block :: Parser (Graph Insn O O)
 block = pushNewScope *> braces statementList <* popTopScope
 
 statementList :: Parser (Graph Insn O O)
-statementList = foldr (<*|*>) emptyGraph <$> many (statement <* semi)
+statementList = foldr (<*|*>) emptyGraph <$> many statement
 
 statement :: Parser (Graph Insn O O)
-statement = assign <|> declare <|> block
+statement = ((assign <|> retStmt <|> declare <|> pure emptyGraph) <* semi) <|> block
 
 assign :: Parser (Graph Insn O O)
 assign = do
     lname <- identifier >>= uniqueOf
     reservedOp "="
-    rval <- RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))
+    rval <- parseRValue
     return . mkMiddle $ LVar lname := rval
+
+retStmt :: Parser (Graph Insn O O)
+retStmt = do
+    reserved "return"
+    mrv <- optionMaybe parseRValue
+    let setRv = case mrv of
+            Nothing -> emptyGraph
+            Just rv -> mkMiddle $ SetRV rv
+    mfname <- use funName
+    fname <- case mfname of
+        Nothing -> P $ P.unexpected "return"
+        Just n  -> pure n
+    postLbl <- freshLabel
+    return $ (setRv <*|*> mkLast (Return fname)) |*><*| mkLabel postLbl
 
 declare :: Parser (Graph Insn O O)
 declare = do
@@ -199,8 +213,11 @@ declare = do
 declaratorAssignment :: LValue -> Parser (Graph Insn O O)
 declaratorAssignment lval = do
     reservedOp "="
-    rval <- RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))
+    rval <- parseRValue
     return . mkMiddle $ lval := rval
+
+parseRValue :: Parser RValue
+parseRValue = RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))
 
 --------------------------------------------------------------------------------------
 --

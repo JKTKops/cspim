@@ -45,7 +45,7 @@ newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) () Compiler)
 
 unwrapCodeGen :: CodeGen a -> SymbolTable -> Compiler (a, [MipsLine])
 unwrapCodeGen (CG rwst) symtab =
-    runRWST rwst symtab () >>= \(a, _, w) -> return (a, toList w)
+    runRWST rwst symtab () <&> \(a, _, w) -> (a, toList w)
 
 emit :: DList MipsLine -> CodeGen ()
 emit = tell
@@ -83,10 +83,11 @@ insnCodeGen (Label l) = labelCodeGen l
 insnCodeGen (Enter f) = enterCodeGen f
 insnCodeGen (lvalue := rvalue) = assignCodeGen lvalue rvalue
 insnCodeGen (Retrieve var) = retrieveCodeGen var
+insnCodeGen (SetRV rvalue) = setRVCodeGen rvalue
 insnCodeGen (Goto l) = gotoCodeGen l
 insnCodeGen (IfGoto rvalue t f) = ifgotoCodeGen rvalue t f
 insnCodeGen (Call f args ret_label) = callCodeGen f args -- drop ret_label as only Hoopl cares
-insnCodeGen (Return f mexp) = returnCodeGen f mexp
+insnCodeGen (Return f) = returnCodeGen f
 
 labelCodeGen :: Tac.Label -> CodeGen ()
 labelCodeGen lbl = do
@@ -167,13 +168,13 @@ assignVarToVar :: MemLoc -> Type -> MemLoc -> Type -> CodeGen ()
 assignVarToVar lloc ltype rloc rtype
     | isIntegralTy ltype && isIntegralTy rtype = case (lloc, rloc) of
           (OffsetLoc loff, OffsetLoc roff) -> do
-              -- l{w,h,b} $compilerTemp1, roff($fp)
+              -- l{w,h,hu,b,bu} $compilerTemp1, roff($fp)
               -- s{w,h,b} $compilerTemp1, loff($fp)
               retrieveInst <- integralLoadInst rtype <@> compilerTemp1 <@> Right (roff, RegFP)
               storeInst   <- integralStoreInst ltype <@> compilerTemp1 <@> Right (loff, RegFP)
               emit $ fromList [instToLine retrieveInst, instToLine storeInst]
           (RegLoc reg, OffsetLoc off) -> do
-              -- l{w,h,b} $reg, off($fp)
+              -- l{w,h,hu,b,bu} $reg, off($fp)
               inst <- integralLoadInst rtype <@> reg <@> Right (off, RegFP)
               emit $ singleton $ instToLine inst
           (OffsetLoc off, RegLoc reg) -> do
@@ -200,8 +201,10 @@ assignToArr uniq var rv = panic "assignment to arrays not implemented"
 
 integralLoadInst :: Type -> CodeGen (RDest -> Address -> MipsInstruction)
 integralLoadInst (IntTy _) = pure MLw
-integralLoadInst (ShortTy _) = pure MLh
-integralLoadInst (CharTy _) = pure MLb
+integralLoadInst (ShortTy Signed)   = pure MLh
+integralLoadInst (ShortTy Unsigned) = pure MLhu
+integralLoadInst (CharTy Signed)    = pure MLb
+integralLoadInst (CharTy Unsigned)  = pure MLbu
 integralLoadInst _ = panic "TAC.CodeGen.integralLoadInst: Non-integral type!"
 
 integralStoreInst :: Type -> CodeGen (RSrc -> Address -> MipsInstruction)
@@ -235,15 +238,23 @@ callCodeGen f_uniq args = panic "call not implemented"
 -- | Generate code for return statements. This includes setting $v0 and the jr $ra instruction.
 --   Destroys the function's frame restoring the frame pointer,
 --   but does /not/ clean the stack arguments. This is the responsibility of the caller.
-returnCodeGen :: Name -> Maybe RValue -> CodeGen ()
-returnCodeGen uniq mrval = do
-    case mrval of
-        Nothing -> pure ()
-        Just _ -> panic "returning expressions not implemented yet"
+setRVCodeGen :: RValue -> CodeGen ()
+setRVCodeGen (RVar (Left uniq)) = do
+    (memloc, ty) <- askMemLocType uniq
+    assignVarToVar (RegLoc RegV0) ty memloc ty
+setRVCodeGen (RVar (Right const))
+  | IntConst i <- const = assignConstToVar (RegLoc RegV0) (IntTy signage) const
+  | otherwise = panic "returning non-integral constants not implemented"
+  where signage = if intValueOfConst const < 0 then Signed else Unsigned
+
+-- | Generate code for returning from a function. Reloads saved registers,
+--   and cleans up the stack frame. Does /not/ set $v0; SetRV instructions set the return value.
+returnCodeGen :: Name -> CodeGen ()
+returnCodeGen uniq = do
     func <- askFuncTable uniq
     let sf_size = func ^. stackFrame.size
         saved_regs = func ^. stackFrame.savedRegisters
-    emit [mips| move $sp, $fp |]
+    emit [mips| move $sp, $fp # Start return sequence |]
     loadRegs saved_regs
     emit [mips| addu $sp, $sp, !{sf_size}
                 jr $ra

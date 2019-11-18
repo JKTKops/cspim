@@ -107,6 +107,9 @@ pprInsn (Label lbl) = askLabelName lbl <&> \name -> text (name ++ ":")
 pprInsn (Enter f)   = askVarName f <&> \name -> text ("enter " ++ name)
 pprInsn (lv := rv)  = (\lft rght -> lft <+> text ":=" <+> rght) <$> ppr lv <*> ppr rv
 pprInsn (Retrieve n) = askVarName n <&> \name -> text ("retrieve " ++ name)
+pprInsn (SetRV rv) = do
+    rv <- ppr rv
+    return $ text "set return value to" <+> rv
 pprInsn (Goto lbl)  = askLabelName lbl <&> \name -> text ("goto " ++ name)
 pprInsn (IfGoto rv t f) = do
     test <- ppr rv
@@ -119,13 +122,9 @@ pprInsn (Call f args ret_label) = do
     rl <- ppr ret_label
     return $ text "call" <+> (f <> parens (hsep $ punctuate comma args))
          <+> text "and return to" <+> rl
-pprInsn (Return f rv) = do
+pprInsn (Return f) = do
     f <- ppr f
-    rv <- case rv of
-        Nothing -> pure mempty
-        Just rv -> ppr rv
-    return $ text "return" <+> rv <+> text "from" <+> f
-
+    return $ text "return from" <+> f
 
 
 pprLValue :: SymTabReader m => LValue -> m Doc

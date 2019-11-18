@@ -31,10 +31,11 @@ data Insn e x where
     Enter      :: Name                      -> Insn O O -- see note [Enter O/O]
     (:=)       :: LValue -> RValue          -> Insn O O
     Retrieve   :: Name                      -> Insn O O -- move (loc name) $v0
+    SetRV      :: RValue                    -> Insn O O
     Goto       :: Label                     -> Insn O C
     IfGoto     :: RValue -> Label  -> Label -> Insn O C -- cond iflabel elselable
     Call       :: Name -> [RValue] -> Label -> Insn O C -- func args return_label
-    Return     :: Name -> Maybe RValue      -> Insn O C -- func (expr or void)
+    Return     :: Name                      -> Insn O C -- func (expr or void)
 
 instance Show (Insn e x) where
     show (Label lbl) = show lbl ++ ":"
@@ -44,7 +45,7 @@ instance Show (Insn e x) where
     show (Goto lbl)   = "goto " ++ show lbl
     show (IfGoto rv tl fl) = "ifgoto (" ++ show rv ++") " ++ show tl ++ " " ++ show fl
     show (Call f args _) = unwords ["call", show f, show args]
-    show (Return _ rv) = "return" ++ maybe "" ((" " ++) . show) rv
+    show (Return _) = "return"
 
 {- NOTE [Enter O/O]
 The enter f instruction is used to generate the prologue for function f.
@@ -124,7 +125,7 @@ instance NonLocal Insn where
     successors (Goto l) = [l]
     successors (IfGoto _ t f) = [f, t] -- this makes postorder_dfs give us true-fallthrough
     successors (Call _ _ r) = [r]
-    successors (Return _ _) = []
+    successors (Return _) = []
 
 instance HooplNode Insn where
     mkBranchNode = Goto
