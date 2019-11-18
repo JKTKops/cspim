@@ -17,24 +17,24 @@ will spawn a QtSpim instance that loads all of the generated files.
 
 Planned features:
 
- [x] Variables
- [x] int type
- [ ] Integral (signed/unsigned int/short/char) types, but not long
- [x] return statements
- [ ] if, else, for, while, do-while control flow
- [ ] goto
- [ ] basic C expressions with operators
- [ ] arrays
- [ ] typedefs
- [ ] structs
+    [x] Variables
+    [x] int type
+    [ ] Integral (signed/unsigned int/short/char) types, but not long
+    [x] return statements
+    [ ] if, else, for, while, do-while control flow
+    [ ] goto
+    [ ] basic C expressions with operators
+    [ ] arrays
+    [ ] typedefs
+    [ ] structs
  
 These features are planned for completion in time for SpimBot.
 
 These additional features are planned longer-term goals:
 
- [ ] Optimization engine
- [ ] Register allocator (+ tagging variables with 'live accross function call' so that temps can be saved)
- [ ] floating point types and operations
+    [ ] Optimization engine
+    [ ] Register allocator (+ tagging variables with 'live accross function call' so that temps can be saved)
+    [ ] floating point types and operations
  
 If CSpim becomes a powerful enough compiler, it may eventually be a target for ProtoHaskell so that I can say I've written an
 end-to-end Haskell compiler :)
