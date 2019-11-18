@@ -129,3 +129,36 @@ finalizeStdErrOutput c = do
   where error es  = rethrowCErrs (fromList $ removeVerboseLogs $ toList es) $> undefined
         warn ws a = rethrowCErrs (fromList $ removeVerboseLogs $ toList ws) $> a
         ok = return
+
+--------------------------------------------------------------------------------------
+--
+-- Functor utilities
+--
+--------------------------------------------------------------------------------------
+
+lowerM :: Functor m => m (a -> b) -> a -> m b
+lowerM f x = f <&> ($ x)
+
+{- | A utility operator for working with functors containing functions.
+     Typically, Applicative is used to apply functions in functors to values in functors.
+     But Functor is plenty sufficent to apply functions in functors to /regular/ values.
+     This is ocassionally useful when working with monads, when you have several regular values
+     to apply to a monadic function:
+
+@
+foo m x y = do
+  f <- m
+  return $ f x y
+
+foo m x y = m '<@>' x '<@>' y
+@
+-}
+(<@>) :: Functor m => m (a -> b) -> a -> m b
+(<@>) = lowerM
+infixl 4 <@>
+
+lowerM2 :: Functor m => m (a -> b -> c) -> a -> b -> m c
+lowerM2 f x y = f <@> x <@> y
+
+lowerM3 :: Functor m => m (a -> b -> c -> d) -> a -> b -> c -> m d
+lowerM3 f x y z = f <@> x <@> y <@> z

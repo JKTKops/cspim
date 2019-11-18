@@ -36,7 +36,6 @@ library:
   - lens
   - mtl
   - monad-validate
-  - megaparsec
   - parsec
   - pretty
   - template-haskell

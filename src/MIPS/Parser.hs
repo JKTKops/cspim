@@ -47,7 +47,7 @@ tokParser = makeTokenParser haskellStyle
 natural :: Parser Int
 natural = fromIntegral <$> Parsec.natural tokParser
 
-integer :: Parser Word32
+integer :: Integral a => Parser a
 integer = fromIntegral <$> Parsec.integer tokParser
 
 offset :: Parser Int32

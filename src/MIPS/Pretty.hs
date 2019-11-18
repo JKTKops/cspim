@@ -113,6 +113,8 @@ makeMIPrettyInstance
 instance Pretty MipsLine where
     ppr (ML (Just md) Nothing) = ppr md
     ppr (ML (Just md) (Just com)) = ppr md <> indent 40 (text "#" <+> text com)
+    -- Perhaps we want to be able to note whether or not a comment should be indented?
+    ppr (ML Nothing (Just com)) = text "#" <+> text com
     ppr (ML Nothing Nothing) = empty
 
     pprList = vsep . map ppr

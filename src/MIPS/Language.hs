@@ -9,7 +9,7 @@ import Data.Word
 import Data.Int
 
 type Label  = String
-type Imm    = Word32
+type Imm    = Int32
 type Offset = Int32
 
 -- TODO these directives are fucked and need arguments where appropriate

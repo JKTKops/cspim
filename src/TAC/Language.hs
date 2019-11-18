@@ -146,6 +146,12 @@ isIntTy :: Type -> Bool
 isIntTy (IntTy _) = True
 isIntTy _         = False
 
+isIntegralTy :: Type -> Bool
+isIntegralTy (IntTy _)   = True
+isIntegralTy (ShortTy _) = True
+isIntegralTy (CharTy _)  = True
+isIntegralTy _ = False
+
 sizeof :: Type -> Int
 sizeof (CharTy _)  = 1
 sizeof (ShortTy _) = 2
@@ -183,6 +189,7 @@ data MemLoc = OffsetLoc Int32
             -- this turns into .extern <name>_<unique> <sizeof(typeof(unique))> if true (global)
             -- otherwise into  .lcomm <name>_<unique> <sizeof(typeof(unique))>
             | GPLoc Bool Unique
+            deriving Eq
 
 data Function = Fn
      { _name       :: Name

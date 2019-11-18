@@ -158,11 +158,16 @@ mainFunction = do
 
     stackFrame <- buildStackFrame [] main_lcls
 
-    let graph = mkFirst (Label entLbl) <*|*> body <*|*> mkLast (Return main_uniq Nothing)
+    let graph = mkFirst (Label entLbl)
+                <*|*> mkMiddle (Enter main_uniq)
+                <*|*> body
+                <*|*> mkLast (Return main_uniq Nothing)
         fn = Fn { _name = main_uniq, _args = []
                 , _locals = main_lcls, _stackFrame = stackFrame
                 , _body = TacGraph graph entLbl
                 }
+
+    symTab.funcTable %= mapInsert main_uniq fn
     symTab ~> return . Prog [fn] [] []
 
 block :: Parser (Graph Insn O O)

@@ -21,8 +21,11 @@ import MIPS.Parser (mips)
 import Data.DList hiding (toList, fromList) -- imported from IsList already
 import Data.Function ((&))
 import Data.WordUtils
+import Data.Maybe (fromMaybe)
+import qualified Data.Map as M
 
 import Control.Monad.RWS.Strict
+import Control.Lens
 
 mipsCodeGenProc :: Program -> Compiler [MipsLine]
 mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
@@ -92,8 +95,39 @@ labelCodeGen lbl = do
 
 -- | Generates assembly for an 'enter f' instruction.
 --   This assembly is called the "prologue" and builds the stack frame for the function.
+
+-- TODO: Affected by leaf procedure flag
 enterCodeGen :: Name -> CodeGen ()
-enterCodeGen uniq = panic "enter instruction not implemented"
+enterCodeGen uniq = do
+    func <- askFuncTable uniq
+    let sf = func ^. stackFrame
+        sf_size = sf ^. size
+        sf_save_regs = sf ^. savedRegisters
+        sf_pass_table = sf ^. passingTable
+    emit [mips| addu $sp, $sp, !{ - sf_size } |]
+    saveRegisters sf_save_regs
+    emit [mips| move $fp, $sp |]
+    storeArgs sf_pass_table
+
+  where
+    saveRegisters :: M.Map Reg MemLoc -> CodeGen ()
+    saveRegisters map =
+        let stackSaved = mapFilter isOffsetLoc map
+        in sequence_ $ mapMapWithKey saveReg stackSaved
+      where isOffsetLoc loc | OffsetLoc _ <- loc = True
+                            | otherwise          = False
+
+    saveReg :: Reg -> MemLoc -> CodeGen ()
+    saveReg reg (OffsetLoc off) =
+        emit [mips| sw ${reg}, !{off}($sp) |]
+
+    storeArgs :: UniqueMap MemLoc -> CodeGen ()
+    storeArgs = sequence_ . mapMapWithKey storeArg
+
+    storeArg :: Name -> MemLoc -> CodeGen ()
+    storeArg var desired_loc = do
+        (loc, ty) <- askMemLocType var
+        assignVarToVar loc ty desired_loc ty
 
 {- NOTE: [Prologue/return sensitivity]
 
@@ -131,28 +165,50 @@ assignCodeGen lvalue rvalue =
 
 assignVarToVar :: MemLoc -> Type -> MemLoc -> Type -> CodeGen ()
 assignVarToVar lloc ltype rloc rtype
-    | isIntTy ltype && isIntTy rtype = case (lloc, rloc) of
-          (OffsetLoc loff, OffsetLoc roff) -> emit
-            [mips| lw ${compilerTemp1}, !{roff}($fp)
-                   sw ${compilerTemp1}, !{loff}($fp)
-                 |]
-          (RegLoc reg, OffsetLoc off) -> emit [mips| lw ${reg}, !{off}($sp) |]
-          (OffsetLoc off, RegLoc reg) -> emit [mips| sw ${reg}, !{off}($sp) |]
-          (RegLoc lr, RegLoc rr) ->      emit [mips| move ${lr}, ${rr} |]
+    | isIntegralTy ltype && isIntegralTy rtype = case (lloc, rloc) of
+          (OffsetLoc loff, OffsetLoc roff) -> do
+              -- l{w,h,b} $compilerTemp1, roff($fp)
+              -- s{w,h,b} $compilerTemp1, loff($fp)
+              retrieveInst <- integralLoadInst rtype <@> compilerTemp1 <@> Right (roff, RegFP)
+              storeInst   <- integralStoreInst ltype <@> compilerTemp1 <@> Right (loff, RegFP)
+              emit $ fromList [instToLine retrieveInst, instToLine storeInst]
+          (RegLoc reg, OffsetLoc off) -> do
+              -- l{w,h,b} $reg, off($fp)
+              inst <- integralLoadInst rtype <@> reg <@> Right (off, RegFP)
+              emit $ singleton $ instToLine inst
+          (OffsetLoc off, RegLoc reg) -> do
+              -- s{w,h,b} $reg, off($fp)
+              inst <- integralStoreInst ltype <@> reg <@> Right (off, RegFP)
+              emit $ singleton $ instToLine inst
+          (RegLoc lr, RegLoc rr) -> emit [mips| move ${lr}, ${rr} |]
           _ -> panic "Int types being assigned to/from F registers!"
 
 assignConstToVar :: MemLoc -> Type -> Constant -> CodeGen ()
 assignConstToVar vloc vtype const
     | isIntTy vtype = case vloc of
           (OffsetLoc off) -> emit
-                      [mips| add ${compilerTemp1}, $0, !{intValueOfConst const}
-                             sw ${compilerTemp1}, !{off}($fp)
-                           |]
+              (if intValueOfConst const == 0
+              then [mips| sw $zero, !{off}($fp) |]
+              else [mips| add ${compilerTemp1}, $0, !{intValueOfConst const}
+                          sw ${compilerTemp1}, !{off}($fp)
+                        |])
           (RegLoc reg) -> emit [mips| add ${reg}, $0, !{intValueOfConst const} |]
 
 -- | Generates assembly for the (LIxArr n ix := RValue) case.
 assignToArr :: Name -> Var -> RValue -> CodeGen ()
 assignToArr uniq var rv = panic "assignment to arrays not implemented"
+
+integralLoadInst :: Type -> CodeGen (RDest -> Address -> MipsInstruction)
+integralLoadInst (IntTy _) = pure MLw
+integralLoadInst (ShortTy _) = pure MLh
+integralLoadInst (CharTy _) = pure MLb
+integralLoadInst _ = panic "TAC.CodeGen.integralLoadInst: Non-integral type!"
+
+integralStoreInst :: Type -> CodeGen (RSrc -> Address -> MipsInstruction)
+integralStoreInst (IntTy _) = pure MSw
+integralStoreInst (ShortTy _) = pure MSh
+integralStoreInst (CharTy _) = pure MSb
+integralStoreInst _ = panic "TAC.CodeGen.integralStoreInst: Non-integral type!"
 
 -- | Generates code for a 'retrieve v' instruction.
 retrieveCodeGen :: Name -> CodeGen ()
@@ -180,7 +236,30 @@ callCodeGen f_uniq args = panic "call not implemented"
 --   Destroys the function's frame restoring the frame pointer,
 --   but does /not/ clean the stack arguments. This is the responsibility of the caller.
 returnCodeGen :: Name -> Maybe RValue -> CodeGen ()
-returnCodeGen uniq mrval = emit [mips| jr $ra |]--panic "return not implemented"
+returnCodeGen uniq mrval = do
+    case mrval of
+        Nothing -> pure ()
+        Just _ -> panic "returning expressions not implemented yet"
+    func <- askFuncTable uniq
+    let sf_size = func ^. stackFrame.size
+        saved_regs = func ^. stackFrame.savedRegisters
+    emit [mips| move $sp, $fp |]
+    loadRegs saved_regs
+    emit [mips| addu $sp, $sp, !{sf_size}
+                jr $ra
+              |]
+
+  where loadRegs :: M.Map Reg MemLoc -> CodeGen ()
+        loadRegs map =
+            let stackSaved = mapFilter isOffsetLoc map
+            in sequence_ $ mapMapWithKey loadReg stackSaved
+          where isOffsetLoc loc | OffsetLoc _ <- loc = True
+                                | otherwise          = False
+
+        loadReg :: Reg -> MemLoc -> CodeGen ()
+        loadReg reg (OffsetLoc off) =
+            emit [mips| lw ${reg}, !{off}($sp) |]
+
 
 --------------------------------------------------------------------------------------
 --
@@ -199,13 +278,18 @@ codeGenBlockInsns (e, ms, x) = insnCodeGen e >> mapM_ insnCodeGen ms >> insnCode
 
 --------------------------------------------------------------------------------------
 --
--- Utilities for the CodeGen Monad (should be defined in separate file?)
+-- Utilities for working with raw instructions
 --
 --------------------------------------------------------------------------------------
 
-invertOffset :: MemLoc -> MemLoc
-invertOffset (OffsetLoc o) = OffsetLoc (-o)
-invertOffset ml = ml
+instToLine :: MipsInstruction -> MipsLine
+instToLine mi = ML (Just (MInst mi)) Nothing
+
+--------------------------------------------------------------------------------------
+--
+-- Utilities for the CodeGen Monad (should be defined in separate file?)
+--
+--------------------------------------------------------------------------------------
 
 class SymTabKey k where
     notFound :: String -> k -> CGError
@@ -228,7 +312,7 @@ askLabelName lbl = askLabelNameM lbl >>= \case
 fmap combined with 'maybe' is more efficient
 -}
 askLabelName :: Tac.Label -> CodeGen String
-askLabelName lbl = maybe (show lbl) id <$> askLabelNameM lbl
+askLabelName lbl = fromMaybe ('$' : show lbl) <$> askLabelNameM lbl
 
 askVarName :: Unique -> CodeGen String
 askVarName = askCodeGen "var names" askVarNameM
