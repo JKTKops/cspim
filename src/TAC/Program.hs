@@ -9,6 +9,7 @@ import qualified TAC.Language as Hoopl ((<*>))
 import Compiler.SymbolTable
 import Control.Lens.TH
 
+-- | Alias for 'Hoopl.<*>' which doesn't conflict with Applicative.<*>.
 (<*|*>) :: NonLocal n => Graph n e O -> Graph n O x -> Graph n e x
 (<*|*>) = (Hoopl.<*>)
 

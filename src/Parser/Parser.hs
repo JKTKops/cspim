@@ -121,8 +121,7 @@ optionMaybe = P . P.optionMaybe . unP
 --------------------------------------------------------------------------------------
 
 parseC :: String -> String -> Compiler Program
-parseC fname src =
-    verboseLog "starting parse" *> crashOutOfScope parse <* verboseLog "parse completed"
+parseC fname src = crashOutOfScope parse
   where crashOutOfScope = handleC error warn ok
         error = compilerErrors
         warn es prog = isFlagSet FDeferOutOfScopeErrors <$> compilerFlags >>= \b ->

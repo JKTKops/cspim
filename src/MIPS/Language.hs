@@ -14,17 +14,17 @@ type Offset = Int32
 
 -- TODO these directives are fucked and need arguments where appropriate
 data Directive
-     = DotByte
-     | DotHalf
-     | DotWord
-     | DotFloat
-     | DotDouble
-     | DotAscii
-     | DotAsciiz
+     = DotByte   [Word8]
+     | DotHalf   [Word16]
+     | DotWord   [Word32]
+     | DotFloat  [Float]
+     | DotDouble [Double]
+     | DotAscii  String
+     | DotAsciiz String
      | DotText
      | DotData
-     | DotGlobl
-     deriving (Eq, Ord, Enum, Bounded, Show, Typeable, Data, Lift)
+     | DotGlobl  String
+     deriving (Eq, Ord, Show, Typeable, Data, Lift)
 
 data Reg
      = Reg0
@@ -222,4 +222,4 @@ data MipsDeclaration
 data MipsLine = ML (Maybe MipsDeclaration) (Maybe String) -- declaration + comment
   deriving (Eq, Ord, Show)
 
-type MipsProgram = Array Word32 MipsLine
+type Program = [MipsLine]

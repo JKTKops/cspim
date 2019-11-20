@@ -1,15 +1,26 @@
+{-# LANGUAGE TypeFamilies #-}
 module Compiler.Flags where
 
 import Data.Data
 import qualified Data.Set as S
+import Control.Lens
 
 data Flag
      = Verbose
+     | E -- stop after preprocessing
+
      | FDeferOutOfScopeErrors
+
+     | DumpTac
+     | DumpSimpl
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 newtype Flags = Flags { getFlags :: S.Set Flag }
   deriving Show
+
+type instance Index Flags = Flag
+instance Contains Flags where
+    contains k f (Flags s) = Flags <$> contains k f s
 
 noFlags :: Flags
 noFlags = Flags S.empty
@@ -22,3 +33,10 @@ setFlag f (Flags flags) = Flags $ S.insert f flags
 
 unsetFlag :: Flag -> Flags -> Flags
 unsetFlag f (Flags flags) = Flags $ S.delete f flags
+
+isDumpFlag :: Flag -> Bool
+isDumpFlag = (`elem` [DumpTac, DumpSimpl])
+
+dumpExtension :: Flag -> String
+dumpExtension DumpTac = "dump-tac"
+dumpExtension DumpSimpl = "dump-simpl"

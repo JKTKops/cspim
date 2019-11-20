@@ -182,18 +182,20 @@ regByNameNumber = do
         allowedS n = n >= 0 && n <= 7
         n2t n = if n <= 7 then n + 8 else n + 16
 
+-- | This parser is not truly sufficient for parsing MIPS directives.
+--   Write them by hand when they need to be emitted.
 parseDirective :: Parser Directive
 parseDirective = foldl1 (<|>) $ map try
-    [ string ".byte"   $> DotByte
-    , string ".half"   $> DotHalf
-    , string ".word"   $> DotWord
-    , string ".float"  $> DotFloat
-    , string ".double" $> DotDouble
-    , string ".ascii"  $> DotAscii
-    , string ".asciiz" $> DotAsciiz
+    [ string ".byte"   $> DotByte []
+    , string ".half"   $> DotHalf []
+    , string ".word"   $> DotWord []
+    , string ".float"  $> DotFloat []
+    , string ".double" $> DotDouble []
+    , string ".ascii"  $> DotAscii ""
+    , string ".asciiz" $> DotAsciiz ""
     , string ".text"   $> DotText
     , string ".data"   $> DotData
-    , string ".globl"  $> DotGlobl
+    , string ".globl"  $> DotGlobl ""
     ]
 
 parseFReg :: Parser ParsedFReg

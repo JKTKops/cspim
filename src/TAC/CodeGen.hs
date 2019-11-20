@@ -7,18 +7,16 @@
 {-# LANGUAGE QuasiQuotes #-}
 module TAC.CodeGen where
 
-import GHC.Exts (IsList (..))
-
 import Pretty
 import TAC.Program as Tac
 
 import Compiler.Monad
 import Compiler.SymbolTable
 
-import MIPS.Language as Mips hiding (Label)
+import MIPS.Language as Mips hiding (Program, Label)
 import MIPS.Parser (mips)
 
-import Data.DList hiding (toList, fromList) -- imported from IsList already
+import Data.DList
 import Data.Function ((&))
 import Data.WordUtils
 import Data.Maybe (fromMaybe)
@@ -278,11 +276,15 @@ returnCodeGen uniq = do
 --
 --------------------------------------------------------------------------------------
 
--- TODO: emit a .globl directive!
+-- TODO: Don't emit a .globl directive for static functions
 codeGenFunction :: Function -> CodeGen ()
-codeGenFunction f =
+codeGenFunction f = do
     let blockInsns = insnsInFunction f
-    in mapM_ codeGenBlockInsns blockInsns
+    funName <- askVarName $ f ^. name
+    emit [ ML (Just (MDirective $ DotText))          Nothing
+         , ML (Just (MDirective $ DotGlobl funName)) Nothing
+         ]
+    mapM_ codeGenBlockInsns blockInsns
 
 codeGenBlockInsns :: BlockInsns -> CodeGen ()
 codeGenBlockInsns (e, ms, x) = insnCodeGen e >> mapM_ insnCodeGen ms >> insnCodeGen x

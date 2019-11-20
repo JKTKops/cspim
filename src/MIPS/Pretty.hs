@@ -70,6 +70,9 @@ hsep = foldl (<+>) DocEmpty
 punctuate :: Doc -> [Doc] -> Doc
 punctuate p = mconcat . intersperse p
 
+directiveList :: [Doc] -> Doc
+directiveList = punctuate (text ", ")
+
 instance Semigroup Doc where
     (<>) = DocCombine
 
@@ -90,7 +93,16 @@ instance Pretty a => Pretty [a] where
     ppr = pprList
 
 instance Pretty Directive where
-    ppr = text . show
+    ppr (DotByte bytes) = text ".byte" <+> directiveList (map ppr bytes)
+    ppr (DotHalf hs)    = text ".half" <+> directiveList (map ppr hs)
+    ppr (DotWord words) = text ".word" <+> directiveList (map ppr words)
+    ppr (DotFloat fs)   = text ".float" <+> directiveList (map ppr fs)
+    ppr (DotDouble ds)  = text ".double" <+> directiveList (map ppr ds)
+    ppr (DotAscii str)  = text ".ascii" <+> text (show str) -- escapes and quotes
+    ppr (DotAsciiz str) = text ".asciiz" <+> text (show str)
+    ppr DotText         = text ".text"
+    ppr DotData         = text ".data"
+    ppr (DotGlobl str)  = text ".globl" <+> text str
 
 makeRegPrettyInstances
 
@@ -98,7 +110,11 @@ instance Pretty Char   where
     ppr c = char c
     pprList = text
 
+instance Pretty Word8  where ppr = text . show
+instance Pretty Word16 where ppr = text . show
 instance Pretty Word32 where ppr = text . show
+instance Pretty Float  where ppr = text . show
+instance Pretty Double where ppr = text . show
 instance Pretty Offset where ppr = text . show
 instance Pretty Src2 where
     ppr (Left reg)  = ppr reg
@@ -126,6 +142,8 @@ instance Pretty MipsDeclaration where
 
 instance P.Pretty Reg             where pretty = MIPS.Pretty.pretty
 instance P.Pretty FReg            where pretty = MIPS.Pretty.pretty
-instance P.Pretty MipsLine        where pretty = MIPS.Pretty.pretty
+instance P.Pretty MipsLine        where
+    pretty = MIPS.Pretty.pretty
+    prettyList = render . pprList
 instance P.Pretty MipsInstruction where pretty = MIPS.Pretty.pretty
 instance P.Pretty MipsDeclaration where pretty = MIPS.Pretty.pretty
