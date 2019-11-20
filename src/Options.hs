@@ -105,10 +105,19 @@ showOptionsOption = Option [] ["show-options"] (NoArg $ optShowOptions .~ True)
 --   These options are displayed (along with the basic ones) by "--show-options".
 advancedOptions :: [OptDesc]
 advancedOptions =
-    [ Option [] ["f-defer-out-of-scope-errors"]
+    [ Option ['E'] [] (NoArg $ options.flags.contains E .~ True)
+        "Stop after invoking cpp (and output to .i file)"
+
+    , Option [] ["dump-tac"] (NoArg $ options.flags.contains DumpTac .~ True)
+        "Dump the unoptimized TAC to a dump file."
+
+    , Option [] ["dump-simpl"] (NoArg $ options.flags.contains DumpSimpl .~ True)
+        "Dump the optimized TAC to a dump file."
+
+    , Option [] ["f-defer-out-of-scope-errors"]
         (NoArg $ options.flags %~ setFlag FDeferOutOfScopeErrors)
         "don't crash the parser if it finds an out-of-scope variable, \
-        \useful along with -ddump-tac"
+        \useful along with --dump-tac"
 
     , Option [] ["fno-defer-out-of-scope-errors"]
         (NoArg $ options.flags %~ unsetFlag FDeferOutOfScopeErrors)
@@ -149,8 +158,7 @@ handleOneShotOpts InternalOpts{ _optShowVersion = ver
     when opts showOpts
     when (ver || help || opts) exitSuccess
 
-  where showVer  = putStrLn $ "cspim v" ++ showVersion version
-                           ++ " - Max Kopinsky & Ajay Tatachar (C) 2019"
+  where showVer  = putStrLn $ "cspim v" ++ showVersion version ++ " - Max Kopinsky (C) 2019"
 
         showHelp = putStrLn $ info ++ "\ncspim has more options. \
                              \If you really want to see them all,\n\
