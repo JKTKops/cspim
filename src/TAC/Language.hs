@@ -15,9 +15,9 @@ import qualified Data.Map as M
 type Name = Unique
 
 data Constant
-     = IntConst    Integer
-     | FloatConst  Double
-     | StringConst String
+     = IntConst    !Integer
+     | FloatConst  !Double
+     | StringConst !String
      deriving (Eq, Ord, Show)
 
 intValueOfConst :: Integral a => Constant -> a
@@ -29,7 +29,7 @@ type Var = Either Name Constant -- Uniques refer to variable names to disambigua
 data Insn e x where
     Label      :: Label                     -> Insn C O
     Enter      :: Name                      -> Insn O O -- see note [Enter O/O]
-    (:=)       :: LValue -> RValue          -> Insn O O
+    (:=)       :: LValue -> TacExp          -> Insn O O
     Retrieve   :: Name                      -> Insn O O -- move (loc name) $v0
     SetRV      :: RValue                    -> Insn O O
     Goto       :: Label                     -> Insn O C
@@ -68,8 +68,11 @@ data LValue
 data RValue
      = RVar Var
      | RIxArr Name Var -- x[i]
-     | Binop Var Binop Var
-     | Monop Monop Var
+
+data TacExp
+     = ValExp RValue
+     | Binop RValue Binop RValue
+     | Monop Monop RValue
 
 data Binop
      = Add
@@ -97,6 +100,9 @@ instance Show LValue where
 instance Show RValue where
     show (RVar var) = show var
     show (RIxArr name ix) = show name ++ "[" ++ show ix ++ "]"
+
+instance Show TacExp where
+    show (ValExp rv) = show rv
     show (Binop lv op rv) = unwords [show lv, show op, show rv]
     show (Monop op v) = show op ++ show v
 
@@ -153,6 +159,12 @@ isIntegralTy (ShortTy _) = True
 isIntegralTy (CharTy _)  = True
 isIntegralTy _ = False
 
+signageOf :: Type -> Signage
+signageOf (CharTy s)  = s
+signageOf (ShortTy s) = s
+signageOf (IntTy s)   = s
+signageOf _ = error $ "TAC.Language.signageOf: non-integral type argument"
+
 sizeof :: Type -> Int
 sizeof (CharTy _)  = 1
 sizeof (ShortTy _) = 2
@@ -183,13 +195,13 @@ makeLenses ''TacGraph
 
 type TacBlock = Block Insn C C
 
-data MemLoc = OffsetLoc Int32
-            | RegLoc Reg
-            | FRegLoc FReg
+data MemLoc = OffsetLoc !Int32
+            | RegLoc !Reg
+            | FRegLoc !FReg
             -- TODO:
             -- this turns into .extern <name>_<unique> <sizeof(typeof(unique))> if true (global)
             -- otherwise into  .lcomm <name>_<unique> <sizeof(typeof(unique))>
-            | GPLoc Bool Unique
+            | GPLoc !Bool !Unique
             deriving Eq
 
 data Function = Fn

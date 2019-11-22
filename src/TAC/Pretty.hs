@@ -126,6 +126,8 @@ pprInsn (Return f) = do
     f <- ppr f
     return $ text "return from" <+> f
 
+prettyInsn :: SymTabReader m => Insn e x -> m String
+prettyInsn = fmap render . pprInsn
 
 pprLValue :: SymTabReader m => LValue -> m Doc
 pprLValue (LVar name) = ppr name
@@ -137,8 +139,11 @@ pprLValue (LIxArr name ix) = do
 pprRValue :: SymTabReader m => RValue -> m Doc
 pprRValue (RVar var) = ppr var
 pprRValue (RIxArr name ix) = (\name ix -> name <> brackets ix) <$> ppr name <*> ppr ix
-pprRValue (Binop l op r) = liftM2 (<+>) (liftM2 (<+>) (ppr l) (ppr op)) (ppr r)
-pprRValue (Monop op var) = liftM2 (<>) (ppr op) (ppr var)
+
+pprTacExp :: SymTabReader m => TacExp -> m Doc
+pprTacExp (ValExp rv)    = ppr rv
+pprTacExp (Binop l op r) = liftM2 (<+>) (liftM2 (<+>) (ppr l) (ppr op)) (ppr r)
+pprTacExp (Monop op var) = liftM2 (<>) (ppr op) (ppr var)
 
 pprSignage :: Applicative f => Signage -> f Doc
 pprSignage Signed   = pure $ text "signed"
@@ -151,6 +156,7 @@ instance Ppr TacGraph   where ppr = pprTacGraph
 instance Ppr (Insn e x) where ppr = pprInsn
 instance Ppr LValue     where ppr = pprLValue
 instance Ppr RValue     where ppr = pprRValue
+instance Ppr TacExp     where ppr = pprTacExp
 instance Ppr Binop      where ppr = pure . text . show
 instance Ppr Monop      where ppr = pure . text . show
 instance Ppr Signage    where ppr = pprSignage

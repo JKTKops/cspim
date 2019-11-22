@@ -95,7 +95,9 @@ data MipsInstruction
  | MMul   RDest RSrc Src2
  | MMulou RDest RSrc Src2 -- Try translating this as mulou
                           -- otherwise use multu .. mflo
- | MSllv  RDest RSrc RSrc
+ | MSll   RDest RSrc Src2
+ | MSrl   RDest RSrc Src2
+ | MSra   RDest RSrc Src2
  | MNeg   RDest RSrc
  | MNegu  RDest RSrc
 
@@ -221,5 +223,18 @@ data MipsDeclaration
 
 data MipsLine = ML (Maybe MipsDeclaration) (Maybe String) -- declaration + comment
   deriving (Eq, Ord, Show)
+
+-- declaration :: Lens' MipsLine (Maybe MipsDeclaration)
+declaration :: Functor f
+            => (Maybe MipsDeclaration -> f (Maybe MipsDeclaration))
+            -> MipsLine -> f MipsLine
+declaration f (ML decl comm) = (\decl' -> ML decl' comm) <$> f decl
+
+-- comment :: Lens' MipsLine (Maybe String)
+comment :: Functor f
+        => (Maybe String -> f (Maybe String))
+        -> MipsLine -> f MipsLine
+comment f (ML decl comm) = ML decl <$> f comm
+
 
 type Program = [MipsLine]

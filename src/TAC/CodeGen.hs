@@ -8,6 +8,7 @@
 module TAC.CodeGen where
 
 import Pretty
+import TAC.Pretty (prettyInsn)
 import TAC.Program as Tac
 
 import Compiler.Monad
@@ -61,8 +62,8 @@ compilerAddrTemp :: Reg
 compilerTemp1,  compilerTemp2  :: Reg
 compilerFTemp1, compilerFTemp2 :: FReg -- need two registers to hold a double
 compilerAddrTemp = RegAT
-compilerTemp1  = RegT8
-compilerTemp2  = RegT9
+compilerTemp1  = RegV0
+compilerTemp2  = RegV1
 compilerFTemp1 = RegF0
 compilerFTemp2 = RegF2
 
@@ -75,6 +76,10 @@ compilerFTemp2 = RegF2
 
 -- NOTE: [Unoptimized Mips]
 -- Hand optimizations are currently needed to eliminate redundant labels and the such.
+insnDispatch :: Insn e x -> CodeGen ()
+insnDispatch insn = do
+    comm <- prettyInsn insn
+    emit [mips| # #{comm} |]
 
 insnCodeGen :: Insn e x -> CodeGen ()
 insnCodeGen (Label l) = labelCodeGen l
@@ -147,20 +152,22 @@ restored before.
 --   There are many cases to consider. RValues need to be computed, which is affected
 --   by their types. LValues and RValues can both be arrays, which requires loading the offset
 --   and adjusting it for alignment.
-assignCodeGen :: LValue -> RValue -> CodeGen ()
-assignCodeGen lvalue rvalue =
-    case rvalue of
-        RVar (Left runiq) -> do
+assignCodeGen :: LValue -> TacExp -> CodeGen ()
+assignCodeGen lvalue exp =
+    case exp of
+        (ValExp (RVar (Left runiq))) -> do
             (rMemLoc, rType) <- askMemLocType runiq
             case lvalue of
                 LVar luniq -> do
                     (lMemLoc, lType) <- askMemLocType luniq
                     assignVarToVar lMemLoc lType rMemLoc rType
-        RVar (Right const) ->
+        (ValExp (RVar (Right const))) ->
             case lvalue of
                 LVar luniq -> do
                     (lMemLoc, lType) <- askMemLocType luniq
                     assignConstToVar lMemLoc lType const
+
+        b@(Binop _ _ _) -> binopCodeGen lvalue b
 
 assignVarToVar :: MemLoc -> Type -> MemLoc -> Type -> CodeGen ()
 assignVarToVar lloc ltype rloc rtype
@@ -184,14 +191,56 @@ assignVarToVar lloc ltype rloc rtype
 
 assignConstToVar :: MemLoc -> Type -> Constant -> CodeGen ()
 assignConstToVar vloc vtype const
-    | isIntTy vtype = case vloc of
-          (OffsetLoc off) -> emit
+    | isIntegralTy vtype = case vloc of
+          (OffsetLoc off) ->
               (if intValueOfConst const == 0
-              then [mips| sw $zero, !{off}($fp) |]
-              else [mips| add ${compilerTemp1}, $0, !{intValueOfConst const}
-                          sw ${compilerTemp1}, !{off}($fp)
-                        |])
+                  -- s{w,h,b} $0, off($fp)
+              then integralStoreInst vtype <@> Reg0 <@> Right (off, RegFP) >>=
+                       emit . singleton . instToLine
+              else do
+                      -- add $compilerTemp1, $0, !{intValueOfConst const}
+                      -- s{w,h,b} $compilerTemp1, off($fp)
+                      emit [mips| add ${compilerTemp1}, $0, !{intValueOfConst const} |]
+                      store <- integralStoreInst vtype <@> compilerTemp1 <@> Right (off, RegFP)
+                      emit $ singleton $ instToLine store)
           (RegLoc reg) -> emit [mips| add ${reg}, $0, !{intValueOfConst const} |]
+
+-- | Generate assembly for a binop. Panics if the given 'RValue' is not 'Binop'.
+--   Will cause a /cspim/ crash if either rvalue is of floating point type!
+binopCodeGen :: LValue -> TacExp -> CodeGen ()
+binopCodeGen lvalue b@(Binop lvar op rvar) = do
+    leftRsrc <- getLeft lvar
+    rightSrc2 <- getRight rvar
+    destReg <- chooseDestReg lvalue
+    instruction <- selectBinopInst op
+    comm <- prettyInsn $ lvalue := b
+    emit [instToLine $ instruction destReg leftRsrc rightSrc2]
+
+
+  where getLeft (RVar (Left lu)) = getNameWithDefault compilerTemp1 lu
+        getLeft (RVar (Right (IntConst c))) = do
+            emit [mips| li ${compilerTemp1}, !{fromIntegral c} |]
+            return compilerTemp1
+        getLeft (RVar (Right _)) = panic "binopCodeGen: left operand is non-integral constant"
+
+        getRight (RVar (Left ru)) = Left <$> getNameWithDefault compilerTemp2 ru
+        getRight (RVar (Right (IntConst c))) = return $ Right $ fromIntegral c
+        getRight (RVar (Right _)) = panic "binopCodeGen: right operand is non-integral constant"
+
+        getNameWithDefault :: Reg -> Name -> CodeGen Reg
+        getNameWithDefault def u = do
+            (loc, ty) <- askMemLocType u
+            case loc of
+                OffsetLoc off -> do
+                    load <- integralLoadInst ty
+                    emit [instToLine $ load def $ Right (off, RegFP)]
+                    return def
+                RegLoc reg -> return reg
+                _ -> panic "binopCodeGen: floating point/global variables not implemented"
+        selectBinopInst op = return MAddu
+        chooseDestReg lvalue = return RegV0
+
+binopCodeGen _ _ = panic $ "binopCodeGen: RValue isn't a binop!"
 
 -- | Generates assembly for the (LIxArr n ix := RValue) case.
 assignToArr :: Name -> Var -> RValue -> CodeGen ()
@@ -287,7 +336,7 @@ codeGenFunction f = do
     mapM_ codeGenBlockInsns blockInsns
 
 codeGenBlockInsns :: BlockInsns -> CodeGen ()
-codeGenBlockInsns (e, ms, x) = insnCodeGen e >> mapM_ insnCodeGen ms >> insnCodeGen x
+codeGenBlockInsns (e, ms, x) = insnDispatch e >> mapM_ insnDispatch ms >> insnDispatch x
 
 --------------------------------------------------------------------------------------
 --

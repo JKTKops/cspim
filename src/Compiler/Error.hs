@@ -23,6 +23,9 @@ data CEAction = W2Error | E2Warning | Ignore | NoChange deriving (Eq, Show)
 data ErrorType = VerboseLog | Warning | Error deriving (Eq, Show, Enum, Bounded)
 data CErr = forall e. CompileError e => CErr ErrorType e
 
+instance Show CErr where
+    show (CErr ety e) = "CErr " ++ show ety ++ ": " ++ pretty e
+
 newtype VerboseLog = VL { getLog :: String }
 instance Pretty VerboseLog where
     pretty (VL s) = s

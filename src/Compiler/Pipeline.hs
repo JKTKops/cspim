@@ -106,7 +106,23 @@ data Pipe m a b where
 infixr 6 :|>
 
 type PhaseDesc a b = a -> Compiler b
+
+-- | Similar to '*>' but also passes an argument through to the center.
+--   Compare:
+--
+-- @
+-- (>*>) :: Applicative f => f a -> (t -> f b) -> t -> f b
+-- (*>)  :: Applicative f => f a       -> f b       -> f b
+-- @
+(>*>) :: Applicative f => f a -> (t -> f b) -> t -> f b
 (>*>) a f b = a *> f b
+-- | Similar to '<*' but also passes an argument through to the center.
+--   Compare:
+-- @
+-- (<*<) :: Applicative f => (t -> f a) -> f b -> t -> f a
+-- (<*)  :: Applicative f =>       f a  -> f b      -> f a
+-- @
+(<*<) :: Applicative f => (t -> f a) -> f b -> t -> f a
 (<*<) f b a = f a <* b
 infixl 4 >*>, <*<
 
@@ -127,8 +143,10 @@ parsePhase fname src = do
             dump (dropExtension fname <.> dumpExtension DumpTac, pretty prog)
             verboseLog "Dumped TAC."
 
+-- Note: can't dump inside optimizer since it won't dump at all if it crashes
+-- (CompilerT :( ) so just dump the final output and use Hoopl fuel to debug it.
 optTacPhase :: PhaseDesc TAC.Program TAC.Program
-optTacPhase = pure -- set the --dump-tac
+optTacPhase = pure -- TODO setup --dump-simpl
 
 tac2MipsPhase :: PhaseDesc TAC.Program MIPS.Program
 tac2MipsPhase = verboseLog "Start instruction selection..."
