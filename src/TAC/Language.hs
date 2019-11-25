@@ -163,7 +163,7 @@ signageOf :: Type -> Signage
 signageOf (CharTy s)  = s
 signageOf (ShortTy s) = s
 signageOf (IntTy s)   = s
-signageOf _ = error $ "TAC.Language.signageOf: non-integral type argument"
+signageOf _ = error "TAC.Language.signageOf: non-integral type argument"
 
 sizeof :: Type -> Int
 sizeof (CharTy _)  = 1

@@ -1,9 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE QuasiQuotes #-}
 module TAC.CodeGen where
 
@@ -76,10 +76,11 @@ compilerFTemp2 = RegF2
 
 -- NOTE: [Unoptimized Mips]
 -- Hand optimizations are currently needed to eliminate redundant labels and the such.
-insnDispatch :: Insn e x -> CodeGen ()
-insnDispatch insn = do
-    comm <- prettyInsn insn
-    emit [mips| # #{comm} |]
+-- insnDispatch :: Insn e x -> CodeGen ()
+-- insnDispatch insn = do
+--     comm <- prettyInsn insn
+--     emit [mips| ##{comm} |]
+--     insnCodeGen insn
 
 insnCodeGen :: Insn e x -> CodeGen ()
 insnCodeGen (Label l) = labelCodeGen l
@@ -205,40 +206,113 @@ assignConstToVar vloc vtype const
                       emit $ singleton $ instToLine store)
           (RegLoc reg) -> emit [mips| add ${reg}, $0, !{intValueOfConst const} |]
 
+{- NOTE: [Mul instructions]
+
+Spim does overflow checking for mulo and mulou instructions, which we don't want to perform.
+Mostly because those checks take ~5 instructions and cause an exception which takes more
+instructions to ignore. Instead, we need to explicitly generate the code
+
+mult $v0, $v1
+mflo $v0
+
+-}
 -- | Generate assembly for a binop. Panics if the given 'RValue' is not 'Binop'.
 --   Will cause a /cspim/ crash if either rvalue is of floating point type!
 binopCodeGen :: LValue -> TacExp -> CodeGen ()
 binopCodeGen lvalue b@(Binop lvar op rvar) = do
     leftRsrc <- getLeft lvar
+    leftSignage <- getSignage lvar
+    rightSignage <- getSignage rvar
     rightSrc2 <- getRight rvar
-    destReg <- chooseDestReg lvalue
-    instruction <- selectBinopInst op
+    instruction <- selectBinopInst op leftSignage rightSignage
     comm <- prettyInsn $ lvalue := b
-    emit [instToLine $ instruction destReg leftRsrc rightSrc2]
+    (destReg, storeCode) <- chooseDestReg lvalue
+    emit $ instruction destReg leftRsrc rightSrc2
+    emit   storeCode
 
 
-  where getLeft (RVar (Left lu)) = getNameWithDefault compilerTemp1 lu
+  where getLeft (RVar (Left lu)) = loadNameWithDefault compilerTemp1 lu
         getLeft (RVar (Right (IntConst c))) = do
             emit [mips| li ${compilerTemp1}, !{fromIntegral c} |]
             return compilerTemp1
         getLeft (RVar (Right _)) = panic "binopCodeGen: left operand is non-integral constant"
 
-        getRight (RVar (Left ru)) = Left <$> getNameWithDefault compilerTemp2 ru
+        getRight (RVar (Left ru)) = Left <$> loadNameWithDefault compilerTemp2 ru
         getRight (RVar (Right (IntConst c))) = return $ Right $ fromIntegral c
         getRight (RVar (Right _)) = panic "binopCodeGen: right operand is non-integral constant"
 
-        getNameWithDefault :: Reg -> Name -> CodeGen Reg
-        getNameWithDefault def u = do
+        chooseDestReg (LVar u) = ask >>= \r ->
+            CG $ lift $ do
+                (reg, _, code) <- runRWST (unCG $ storeNameWithDefault compilerTemp1 u) r ()
+                return (reg, code)
+
+        loadNameWithDefault :: Reg -> Name -> CodeGen Reg
+        loadNameWithDefault = handleNameWithDefaultReg integralLoadInst
+
+        storeNameWithDefault :: Reg -> Name -> CodeGen Reg
+        storeNameWithDefault = handleNameWithDefaultReg integralStoreInst
+
+        handleNameWithDefaultReg :: (Type -> CodeGen (Reg -> Address -> MipsInstruction))
+                                 -> Reg -> Name -> CodeGen Reg
+        handleNameWithDefaultReg instFor def u = do
             (loc, ty) <- askMemLocType u
             case loc of
                 OffsetLoc off -> do
-                    load <- integralLoadInst ty
-                    emit [instToLine $ load def $ Right (off, RegFP)]
+                    handler <- instFor ty
+                    emit [instToLine $ handler def $ Right (off, RegFP)]
                     return def
                 RegLoc reg -> return reg
                 _ -> panic "binopCodeGen: floating point/global variables not implemented"
-        selectBinopInst op = return MAddu
-        chooseDestReg lvalue = return RegV0
+
+        selectBinopInst :: Binop -> Signage -> Signage -- signages of the operands
+                        -> CodeGen (RDest -> RSrc -> Src2 -> DList MipsLine)
+        selectBinopInst op lsign rsign = return $ case op of
+            Add -> instToLines -< MAddu
+            Sub -> instToLines -< MSubu
+            Mul -> mkMulCode
+            Div -> mkDivCode
+            Rem -> mkRemCode
+            ShiftR | lsign == Signed -> instToLines -< MSra
+                   | otherwise       -> instToLines -< MSrl
+            ShiftL              -> instToLines -< MSll
+            Le | eitherUnsigned -> instToLines -< MSleu
+               | otherwise      -> instToLines -< MSle
+            Lt | eitherUnsigned -> instToLines -< MSltu
+               | otherwise      -> instToLines -< MSlt
+            Ge | eitherUnsigned -> instToLines -< MSgeu
+               | otherwise      -> instToLines -< MSge
+            Gt | eitherUnsigned -> instToLines -< MSgtu
+               | otherwise      -> instToLines -< MSgt
+            Eq                  -> instToLines -< MSeq
+            Ne                  -> instToLines -< MSne
+
+          where eitherUnsigned = case (lsign, rsign) of
+                    (Signed, Signed) -> False
+                    _                -> True
+
+                (-<) :: (a -> b) -> (c -> d -> e -> a) -> c -> d -> e -> b
+                (-<) f g c d e = f (g c d e)
+                infixr 9 -<
+
+                mkMulCode :: RDest -> RSrc -> Src2 -> DList MipsLine
+                mkMulCode dest src1 src2 = fmap instToLine insts
+                  where insts = src2Insts <> multInsts
+                        (src2Insts, src2Reg) = case src2 of
+                            Left reg -> ([], reg)
+                            Right imm -> ([MLi compilerTemp2 imm], compilerTemp2)
+                        multInsts = [MMult src1 src2Reg, MMflo dest]
+
+                mkDivCode dest src1 src2 =
+                    [instToLine $ (if eitherUnsigned then MDivu else MDiv) dest src1 src2]
+
+                mkRemCode dest src1 src2 =
+                    [instToLine $ (if eitherUnsigned then MRemu else MRem) dest src1 src2]
+
+
+        getSignage :: RValue -> CodeGen Signage
+        getSignage (RVar (Left u)) = signageOf <$> askVarType u
+        getSignage (RVar (Right _)) = return Signed
+
 
 binopCodeGen _ _ = panic $ "binopCodeGen: RValue isn't a binop!"
 
@@ -336,7 +410,7 @@ codeGenFunction f = do
     mapM_ codeGenBlockInsns blockInsns
 
 codeGenBlockInsns :: BlockInsns -> CodeGen ()
-codeGenBlockInsns (e, ms, x) = insnDispatch e >> mapM_ insnDispatch ms >> insnDispatch x
+codeGenBlockInsns (e, ms, x) = insnCodeGen e >> mapM_ insnCodeGen ms >> insnCodeGen x
 
 --------------------------------------------------------------------------------------
 --
@@ -346,6 +420,9 @@ codeGenBlockInsns (e, ms, x) = insnDispatch e >> mapM_ insnDispatch ms >> insnDi
 
 instToLine :: MipsInstruction -> MipsLine
 instToLine mi = ML (Just (MInst mi)) Nothing
+
+instToLines :: MipsInstruction -> DList MipsLine
+instToLines mi = [ML (Just (MInst mi)) Nothing]
 
 --------------------------------------------------------------------------------------
 --

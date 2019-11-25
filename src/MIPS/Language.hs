@@ -92,6 +92,9 @@ data MipsInstruction
    -- NOT 2 register hi/lo divs.
  | MDiv   RDest RSrc Src2
  | MDivu  RDest RSrc Src2
+ | MRem   RDest RSrc Src2
+ | MRemu  RDest RSrc Src2
+ | MMult  RSrc  RSrc
  | MMul   RDest RSrc Src2
  | MMulou RDest RSrc Src2 -- Try translating this as mulou
                           -- otherwise use multu .. mflo
@@ -209,7 +212,7 @@ data MipsInstruction
  | MMovD FRDest FRSrc | MMovS FRDest FRSrc
 
  -- | Exceptions and Traps
- | MRfe       -- return from exception
+ | MEret      -- return from exception
  | MSyscall   -- Call the system service in $v0
  | MBreak Imm -- cause exception <imm>
  | MNop       -- Do nothing.

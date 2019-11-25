@@ -182,7 +182,7 @@ assign :: Parser (Graph Insn O O)
 assign = do
     lname <- identifier >>= uniqueOf
     reservedOp "="
-    rval <- parseRValue
+    rval <- parseTacExp
     return . mkMiddle $ LVar lname := rval
 
 retStmt :: Parser (Graph Insn O O)
@@ -212,11 +212,14 @@ declare = do
 declaratorAssignment :: LValue -> Parser (Graph Insn O O)
 declaratorAssignment lval = do
     reservedOp "="
-    rval <- parseRValue
+    rval <- parseTacExp
     return . mkMiddle $ lval := rval
 
 parseRValue :: Parser RValue
 parseRValue = RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))
+
+parseTacExp :: Parser TacExp
+parseTacExp = ValExp <$> parseRValue
 
 --------------------------------------------------------------------------------------
 --
