@@ -1,11 +1,13 @@
 module Compiler.Pipeline.Internal where
 
 import System.IO.Unsafe
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
-type Dump = (FilePath, String)
+type Dump = (FilePath, T.Text)
 
 dump :: Applicative f => Dump -> f ()
 dump (fname, contents) = unsafePerformIO $ do
-    writeFile fname contents
+    T.writeFile fname contents
     return $ pure ()
 {-# NOINLINE dump #-}

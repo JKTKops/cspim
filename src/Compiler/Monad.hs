@@ -62,7 +62,7 @@ werrorC = handleC error warn ok
 unwarnC :: FullMonadCompiler m => m a -> m a
 unwarnC = handleC error warn ok
   where error = compilerErrors
-        warn _ a = return a
+        warn _ = return
         ok = return
 
 warnToErrorIf :: (forall e. CompileError e => e -> Bool) -> DList CErr -> Compiler ()
@@ -111,10 +111,10 @@ rethrowCErrs = traverse_ rethrowCErr . toList
 
 verboseLogAction :: CErr -> CEAction -> Compiler ()
 verboseLogAction _ NoChange = return ()
-verboseLogAction (CErr t e) Ignore = verboseLog $ "Ignoring " ++ pretty t ++ ": " ++ pretty e
-verboseLogAction (CErr Warning e) W2Error = verboseLog $ "Warning to error: " ++ pretty e
+verboseLogAction (CErr t e) Ignore = verboseLog $ "Ignoring " <> pretty t <> ": " <> pretty e
+verboseLogAction (CErr Warning e) W2Error = verboseLog $ "Warning to error: " <> pretty e
 verboseLogAction _ W2Error = return ()
-verboseLogAction (CErr Error e) E2Warning = verboseLog $ "Error to warning: " ++ pretty e
+verboseLogAction (CErr Error e) E2Warning = verboseLog $ "Error to warning: " <> pretty e
 verboseLogAction _ E2Warning = return ()
 
 -- | If the verbosity flag is not set, clean verbosity logs from the output.

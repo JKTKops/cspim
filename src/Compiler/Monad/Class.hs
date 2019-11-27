@@ -55,7 +55,7 @@ data These e a = This e | That a | These e a
 --   and additionally must be able to to ask for the current compilation flags.
 class Monad m => MonadCompiler m where
     -- | Log a string to the verbosity log.
-    verboseLog :: String -> m ()
+    verboseLog :: Text -> m ()
 
     -- | Raise a list of compiler warnings. If the input list is empty, the
     --   compiler's state should not be affected.
@@ -76,7 +76,7 @@ compilerError :: (MonadCompiler m, CompileError e) => e -> m a
 compilerError = compilerErrors . singleton . CErr Error
 
 -- | Overloaded panic function for any 'MonadCompiler'.
-panic :: (MonadCompiler m) => String -> m a
+panic :: (MonadCompiler m) => Text -> m a
 panic = compilerError . Panic
 
 rethrowCErr :: (MonadCompiler m) => CErr -> m ()

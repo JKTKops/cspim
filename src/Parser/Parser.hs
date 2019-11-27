@@ -27,6 +27,9 @@ import Data.DList
 import Data.Functor (($>), (<&>))
 import Data.Int
 import Data.Maybe (isJust)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import Control.Monad.State hiding (fail)
 import Control.Monad.Fail (MonadFail)
@@ -36,13 +39,13 @@ import Control.Lens hiding (assign)
 import Control.Lens.Utils
 
 newtype Parser a = P { unP :: ParsecT
-                                String
+                                Text
                                 ParserState
                                 Compiler
                                 a }
   deriving (Functor, Applicative, Alternative, Monad, MonadFail, MonadCompiler)
 
-instance Pretty ParseError where pretty = show
+instance Pretty ParseError where pretty = T.pack . show
 
 instance CompileError ParseError where
     flagAffects _ _ = NoChange
@@ -69,7 +72,7 @@ data ParserState = PS
 
 makeLenses ''ParserState
 
-runParser :: Parser a -> P.SourceName -> String -> Compiler a
+runParser :: Parser a -> P.SourceName -> Text -> Compiler a
 runParser p fname src = do
     res <- P.runParserT (L.whiteSpace *> unP p <* P.eof) emptyParserState fname src
     case res of
@@ -120,7 +123,7 @@ optionMaybe = P . P.optionMaybe . unP
 --
 --------------------------------------------------------------------------------------
 
-parseC :: String -> String -> Compiler Program
+parseC :: FilePath -> Text -> Compiler Program
 parseC fname src = crashOutOfScope parse
   where crashOutOfScope = handleC error warn ok
         error = compilerErrors
@@ -215,6 +218,16 @@ declaratorAssignment lval = do
     rval <- parseTacExp
     return . mkMiddle $ lval := rval
 
+-- Even if we should generate a TacExp here with the output of the final computation
+-- we can't always do that because sometimes we need just the RValue (e.x. returning).
+-- So we generate an extra temporary, and return an RVar with that temporary's unique.
+-- The optimizer can eliminate it.
+-- | Parse a C expression, such as what would appear on the right hand side of an assignment.
+--   Returns an RValue with either the constant value or the unique of the variable
+--   which will hold the final value of the expression.
+parseExpr :: Parser (Graph Insn O O, RValue)
+parseExpr = undefined
+
 parseRValue :: Parser RValue
 parseRValue = RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))
 
@@ -231,7 +244,7 @@ data CustomParseError
      = VariableNotInScope String
 
 instance Pretty CustomParseError where
-    pretty (VariableNotInScope str) = "Out of scope variable: `" ++ str ++ "'"
+    pretty (VariableNotInScope str) = T.pack $ "Out of scope variable: `" <> str <> "'"
 
 instance CompileError CustomParseError where
     flagAffects FDeferOutOfScopeErrors (VariableNotInScope _) = E2Warning
@@ -404,8 +417,9 @@ computeAllocs vars = sequence $ computeAlloc <$> vars
             m_varTy <- lift $ uses (symTab.varTypes) $ mapLookup var
             varTy <- case m_varTy of
                 Nothing -> lift $ panic
-                                $ "Unique " ++ show var ++ " has not been assigned a type!"
-                               ++ " (while allocating arguments)"
+                                $ "Unique " <> T.pack (show var)
+                                  <> " has not been assigned a type!"
+                                  <> " (while allocating arguments)"
                 Just varTy -> pure varTy
             addrFor varTy
 
@@ -434,8 +448,8 @@ buildStackFrame args lcls = do
 --
 --------------------------------------------------------------------------------------
 
-testParser :: Show a => Parser a -> String -> IO String
+testParser :: Show a => Parser a -> Text -> IO String
 testParser p src = case flip runCompiler noFlags $ runParser p "test" src of
-   This errs -> mapM_ (putStrLn . pretty) errs >> return ""
-   These errs a -> mapM_ (putStrLn . pretty) errs >> return (show a)
+   This errs -> mapM_ (T.putStrLn . pretty) errs >> return ""
+   These errs a -> mapM_ (T.putStrLn . pretty) errs >> return (show a)
    That a -> return (show a)

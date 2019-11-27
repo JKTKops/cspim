@@ -32,11 +32,12 @@ mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
             mapM_ codeGenFunction fns
     in snd <$> unwrapCodeGen action symtab
 
-data CGError = UniqueNotInMap String Unique deriving Show
+data CGError = UniqueNotInMap Text Unique deriving Show
 
 instance Pretty CGError where
     pretty (UniqueNotInMap mapName u) =
-        "Unique " ++ show u ++ " could not be found in symbol table: " ++ mapName ++ "."
+        "Unique " <> pretty (show u) <> " could not be found in symbol table: "
+        <> mapName <> "."
 
 newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) () Compiler) a }
   deriving ( Functor, Applicative, Monad, MonadCompiler
@@ -431,12 +432,12 @@ instToLines mi = [ML (Just (MInst mi)) Nothing]
 --------------------------------------------------------------------------------------
 
 class SymTabKey k where
-    notFound :: String -> k -> CGError
+    notFound :: Text -> k -> CGError
 
 instance SymTabKey Int where -- Unique
     notFound = UniqueNotInMap
 
-askCodeGen :: SymTabKey k => String -> AskSymTabM k v -> k -> CodeGen v
+askCodeGen :: SymTabKey k => Text -> AskSymTabM k v -> k -> CodeGen v
 askCodeGen n req key = do
     mv <- req key
     case mv of

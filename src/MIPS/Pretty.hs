@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
 module MIPS.Pretty (pretty) where
 
 import qualified Pretty as P
@@ -8,35 +9,36 @@ import MIPS.PrettyTH
 
 import Data.Word
 import Data.List
+import qualified Data.Text as T
 
 import Control.Monad.State
 import Data.Functor (($>))
 
 data Doc
-     = DocString String
+     = DocString T.Text
      | DocCombine Doc Doc
      | DocIndent Int
      | DocNewline
      | DocEmpty
      deriving Show
 
-render :: Doc -> String
+render :: Doc -> T.Text
 render d = evalState (renderDoc d) 0
 
-renderDoc :: Doc -> State Int String
+renderDoc :: Doc -> State Int T.Text
 renderDoc DocEmpty = pure ""
-renderDoc (DocString s) = modify (+ length s) $> s
+renderDoc (DocString s) = modify (+ T.length s) $> s
 renderDoc (DocCombine d1 d2) = do
     s1 <- renderDoc d1
     s2 <- renderDoc d2
-    return $ s1 ++ s2
+    return $ s1 <> s2
 renderDoc (DocIndent indent) = do
     currentIndent <- get
     let numSpaces = case indent `compare` currentIndent of
             LT -> 1
             EQ -> 1  -- make one space so there's a gap
             GT -> indent - currentIndent
-        spaces = replicate numSpaces ' '
+        spaces = T.replicate numSpaces " "
     put $ currentIndent + numSpaces
     return spaces
 renderDoc DocNewline = put 0 $> "\n"
@@ -44,11 +46,11 @@ renderDoc DocNewline = put 0 $> "\n"
 empty :: Doc
 empty = DocEmpty
 
-text :: String -> Doc
+text :: T.Text -> Doc
 text = DocString
 
 char :: Char -> Doc
-char c = DocString [c]
+char c = DocString $ T.singleton c
 
 indent :: Int -> Doc -> Doc
 indent n d = DocIndent n <> d
@@ -86,7 +88,7 @@ class Pretty a where
 
     pprList xs = char '[' <> punctuate (char ',') (map ppr xs) <> char ']'
 
-pretty :: Pretty a => a -> String
+pretty :: Pretty a => a -> T.Text
 pretty = render . ppr
 
 instance Pretty a => Pretty [a] where
@@ -98,24 +100,24 @@ instance Pretty Directive where
     ppr (DotWord words) = text ".word" <+> directiveList (map ppr words)
     ppr (DotFloat fs)   = text ".float" <+> directiveList (map ppr fs)
     ppr (DotDouble ds)  = text ".double" <+> directiveList (map ppr ds)
-    ppr (DotAscii str)  = text ".ascii" <+> text (show str) -- escapes and quotes
-    ppr (DotAsciiz str) = text ".asciiz" <+> text (show str)
+    ppr (DotAscii str)  = text ".ascii" <+> ppr (show str) -- escapes and quotes
+    ppr (DotAsciiz str) = text ".asciiz" <+> ppr (show str)
     ppr DotText         = text ".text"
     ppr DotData         = text ".data"
-    ppr (DotGlobl str)  = text ".globl" <+> text str
+    ppr (DotGlobl str)  = text ".globl" <+> ppr str
 
 makeRegPrettyInstances
 
 instance Pretty Char   where
     ppr c = char c
-    pprList = text
+    pprList = text . T.pack
 
-instance Pretty Word8  where ppr = text . show
-instance Pretty Word16 where ppr = text . show
-instance Pretty Word32 where ppr = text . show
-instance Pretty Float  where ppr = text . show
-instance Pretty Double where ppr = text . show
-instance Pretty Offset where ppr = text . show
+instance Pretty Word8  where ppr = ppr . show
+instance Pretty Word16 where ppr = ppr . show
+instance Pretty Word32 where ppr = ppr . show
+instance Pretty Float  where ppr = ppr . show
+instance Pretty Double where ppr = ppr . show
+instance Pretty Offset where ppr = ppr . show
 instance Pretty Src2 where
     ppr (Left reg)  = ppr reg
     ppr (Right imm) = ppr imm
@@ -128,16 +130,16 @@ makeMIPrettyInstance
 
 instance Pretty MipsLine where
     ppr (ML (Just md) Nothing) = ppr md
-    ppr (ML (Just md) (Just com)) = ppr md <> indent 40 (text "#" <+> text com)
+    ppr (ML (Just md) (Just com)) = ppr md <> indent 40 (text "#" <+> ppr com)
     -- Perhaps we want to be able to note whether or not a comment should be indented?
-    ppr (ML Nothing (Just com)) = text "#" <+> text com
+    ppr (ML Nothing (Just com)) = text "#" <+> ppr com
     ppr (ML Nothing Nothing) = empty
 
     pprList = vsep . map ppr
 
 instance Pretty MipsDeclaration where
     ppr (MDirective directive) = ppr directive
-    ppr (MLabel label) = text label <> text ":"
+    ppr (MLabel label) = ppr label <> text ":"
     ppr (MInst mi) = indent 4 $ ppr mi
 
 instance P.Pretty Reg             where pretty = MIPS.Pretty.pretty

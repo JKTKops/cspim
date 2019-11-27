@@ -9,12 +9,13 @@ import qualified Text.Parsec.Language as L
 import qualified Text.Parsec.Token as T
 
 import Data.Char
+import Data.Text
 import Data.Function ((&))
 import Data.Functor  (($>))
 
 import Control.Monad (when)
 
-type Lexer = ParsecT String
+type Lexer = ParsecT Text
 
 lexeme :: Monad m => Lexer u m a -> Lexer u m a
 lexeme l = try l <* whiteSpace
@@ -134,7 +135,7 @@ cOps =
 --------------------------------------------------------------------------------------
 
 
-cStyle :: Monad m => T.GenLanguageDef String st m
+cStyle :: Monad m => T.GenLanguageDef Text st m
 cStyle = T.LanguageDef
   { T.commentStart    = "/*"
   , T.commentEnd      = "*/"
@@ -149,7 +150,7 @@ cStyle = T.LanguageDef
   , T.caseSensitive   = True
   }
 
-tokP :: Monad m => T.GenTokenParser String st m
+tokP :: Monad m => T.GenTokenParser Text st m
 tokP = T.makeTokenParser cStyle
 
 -- do NOT use T.integer - it will parse spaces between the sign and the number, but we

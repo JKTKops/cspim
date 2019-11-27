@@ -3,6 +3,8 @@
 module Compiler.Error where
 
 import Pretty
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import Compiler.Flags
 
@@ -24,17 +26,17 @@ data ErrorType = VerboseLog | Warning | Error deriving (Eq, Show, Enum, Bounded)
 data CErr = forall e. CompileError e => CErr ErrorType e
 
 instance Show CErr where
-    show (CErr ety e) = "CErr " ++ show ety ++ ": " ++ pretty e
+    show (CErr ety e) = "CErr " ++ show ety ++ ": " ++ T.unpack (pretty e)
 
-newtype VerboseLog = VL { getLog :: String }
+newtype VerboseLog = VL { getLog :: Text }
 instance Pretty VerboseLog where
     pretty (VL s) = s
 instance CompileError VerboseLog where
     flagAffects _ _ = NoChange
 
-newtype PanicErr = Panic String
+newtype PanicErr = Panic Text
 instance Pretty PanicErr where
-    pretty (Panic s) = "Panic! " ++ s
+    pretty (Panic s) = "Panic! " <> s
 instance CompileError PanicErr where
     flagAffects _ _ = NoChange
 
@@ -65,18 +67,18 @@ instance Pretty CErr where
 
 prettyColoredCErr = \case
     CErr VerboseLog e ->
-        reset ++ "[" ++ aqua ++ "--verbose" ++ reset ++ "]: " ++ pretty e
+        reset <> "[" <> aqua <> "--verbose" <> reset <> "]: " <> pretty e
     CErr Warning e ->
-        reset ++ "[" ++ purple ++ "Warning" ++ reset ++ "]: " ++ pretty e
+        reset <> "[" <> purple <> "Warning" <> reset <> "]: " <> pretty e
     CErr Error e ->
-        reset ++ "[" ++ red ++ "Error" ++ reset ++ "]: " ++ pretty e
-  where reset  = setSGRCode [Reset]
-        aqua   = setSGRCode [SetPaletteColor Foreground $ xterm6LevelRGB 0 5 5]
-        purple = setSGRCode [SetPaletteColor Foreground $ xterm6LevelRGB 2 2 5]
-        red    = setSGRCode [SetPaletteColor Foreground $ xterm6LevelRGB 5 0 0]
+        reset <> "[" <> red <> "Error" <> reset <> "]: " <> pretty e
+  where reset  = T.pack $ setSGRCode [Reset]
+        aqua   = T.pack $ setSGRCode [SetPaletteColor Foreground $ xterm6LevelRGB 0 5 5]
+        purple = T.pack $ setSGRCode [SetPaletteColor Foreground $ xterm6LevelRGB 2 2 5]
+        red    = T.pack $ setSGRCode [SetPaletteColor Foreground $ xterm6LevelRGB 5 0 0]
 
 printCErrs :: [CErr] -> IO ()
-printCErrs = mapM_ (hPutStrLn stderr . pretty)
+printCErrs = mapM_ (T.hPutStrLn stderr . pretty)
 
 instance Pretty ErrorType where
     pretty VerboseLog = "verbose log"

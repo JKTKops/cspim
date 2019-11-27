@@ -22,6 +22,7 @@ description:         Please see the README on GitHub at <https://github.com/JKTK
 default-extensions:
 - ApplicativeDo
 - BangPatterns
+- OverloadedStrings
 
 dependencies:
 - base >= 4.7 && < 5
@@ -40,6 +41,7 @@ library:
   - parsec
   - pretty
   - template-haskell
+  - text
   - haskell-src-meta
 
 executables:

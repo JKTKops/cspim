@@ -19,6 +19,9 @@ import Options
 import Pretty
 
 import Data.Maybe (fromJust, fromMaybe)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import System.IO
 import System.IO.Unsafe
@@ -55,15 +58,15 @@ compile opts filename =
 
 runPipeline :: Options -> Phase -> FilePath -> IO ()
 runPipeline opts startPhase fname = do
-    source <- readFile fname
+    source <- T.readFile fname
     let result = runCompiler (compileAction source) (opts^.flags)
         outFile = fromMaybe (dropExtension fname <.> outputExt) (opts^.outputFile)
     case result of
         This err    -> exitWithCompileError err
-        That result -> writeFile outFile result
+        That result -> T.writeFile outFile result
         These errs result -> do
             printCErrs errs
-            writeFile outFile result
+            T.writeFile outFile result
 
   where compileAction = finalizeStdErrOutput . pipeline (startPhase, endPhase) fname
 
@@ -97,7 +100,7 @@ data Phase
      | PrettyMipsPhase
   deriving (Eq, Ord, Show, Enum, Bounded)
 
-pipeline :: (Phase, Phase) -> FilePath -> String -> Compiler String
+pipeline :: (Phase, Phase) -> FilePath -> Text -> Compiler Text
 pipeline phases fname = execPipe (pickPipe phases fname)
 
 data Pipe m a b where
@@ -126,10 +129,10 @@ type PhaseDesc a b = a -> Compiler b
 (<*<) f b a = f a <* b
 infixl 4 >*>, <*<
 
-cppPhase :: PhaseDesc String String
+cppPhase :: PhaseDesc Text Text
 cppPhase = pure -- todo
 
-parsePhase :: String -> PhaseDesc String TAC.Program
+parsePhase :: FilePath -> PhaseDesc Text TAC.Program
 parsePhase fname src = do
     verboseLog "Start parsing phase..."
     prog <- parseC fname src
@@ -156,13 +159,13 @@ tac2MipsPhase = verboseLog "Start instruction selection..."
 optMipsPhase :: PhaseDesc MIPS.Program MIPS.Program
 optMipsPhase = pure
 
-prettyMipsPhase :: PhaseDesc MIPS.Program String
+prettyMipsPhase :: PhaseDesc MIPS.Program Text
 prettyMipsPhase = verboseLog "pretty-printing MIPS..."
               >*> pure . pretty
               <*< verboseLog "Done."
 
 -- Notation: c = C, i = preprocessed, m = MIPS
-cmPipe, imPipe :: String -> Pipe Compiler String String
+cmPipe, imPipe :: FilePath -> Pipe Compiler Text Text
 cmPipe fname = cppPhase :|> parsePhase fname
                :|> optTacPhase :|> tac2MipsPhase
                :|> optMipsPhase :|> prettyMipsPhase :|> End
@@ -175,7 +178,7 @@ execPipe :: Monad m => Pipe m a b -> a -> m b
 execPipe End = pure
 execPipe (f :|> pipe) = f >=> execPipe pipe
 
-pickPipe :: (Phase, Phase) -> String -> Pipe Compiler String String
+pickPipe :: (Phase, Phase) -> FilePath -> Pipe Compiler Text Text
 pickPipe (CppPhase, PrettyMipsPhase)   = cmPipe
 pickPipe (ParsePhase, PrettyMipsPhase) = imPipe
 pickPipe (CppPhase, CppPhase)          = const (cppPhase :|> End)

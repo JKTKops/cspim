@@ -8,6 +8,7 @@ module TAC.Pretty where
 import GHC.Exts (Constraint)
 
 import Pretty
+import qualified Data.Text as T
 import MIPS.Pretty () -- import instances
 import Text.PrettyPrint hiding ((<>))
 
@@ -58,7 +59,7 @@ pprFunction fn@Fn{_name = n, _args = as, _locals = lcls, _stackFrame = sf, _body
                 allocations = liftM2 (++) (pprSRegs sregs) $ mapM pprAllocUniq (args ++ lcls)
             in (sfHeader :) <$> allocations
 
-        pprSRegs = mapM (pprAssocAlloc Save . first pretty)
+        pprSRegs = mapM (pprAssocAlloc Save .  first (T.unpack . pretty))
         pprAllocUniq = pprAssocAlloc Allocate <=< uniq2Assoc
 
 uniq2Assoc :: SymTabReader m => Unique -> m (String, MemLoc)
@@ -80,8 +81,8 @@ pprAssocAlloc b (name, memloc) = do
 pprMemloc :: SymTabReader m => MemLoc -> m Doc
 pprMemloc = \case
     OffsetLoc i  -> pure $ int (fromIntegral i) <> text "($fp)"
-    RegLoc reg   -> pure $ text $ pretty reg
-    FRegLoc freg -> pure $ text $ pretty freg
+    RegLoc reg   -> pure $ text $ T.unpack $ pretty reg
+    FRegLoc freg -> pure $ text $ T.unpack $ pretty freg
     GPLoc b n -> do
         let directive = if b then ".extern" else ".lcomm"
         name <- askVarName n
@@ -149,7 +150,7 @@ pprSignage :: Applicative f => Signage -> f Doc
 pprSignage Signed   = pure $ text "signed"
 pprSignage Unsigned = pure $ text "unsigned"
 
-instance Pretty Program where pretty = render . prettyProgram
+instance Pretty Program where pretty = T.pack . render . prettyProgram
 instance Ppr Function   where ppr = pprFunction
 instance Ppr MemLoc     where ppr = pprMemloc
 instance Ppr TacGraph   where ppr = pprTacGraph
