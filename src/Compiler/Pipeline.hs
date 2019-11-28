@@ -42,6 +42,7 @@ import qualified MIPS.Language as MIPS
 import MIPS.Pretty () -- pretty instances
 
 import Control.Monad
+import Control.Monad.Extra
 import Control.Lens hiding ((<.>))
 import Control.Lens.Utils
 

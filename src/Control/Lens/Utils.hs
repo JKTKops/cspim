@@ -11,16 +11,6 @@ send g f = use g >>= f
 (~>) = send
 infixr 2 ~>
 
-whenM :: Monad m => m Bool -> m () -> m ()
-whenM mb a = ifM mb a (pure ())
-
-unlessM :: Monad m => m Bool -> m () -> m ()
-unlessM mb a = ifM mb (pure ()) a
-
-ifM :: Monad m => m Bool -> m a -> m a -> m a
-ifM mb t f = mb >>= \b -> if b then t else f
-{-# INLINE ifM #-}
-
 hasM :: MonadState s1 m => Getting s2 s1 s2 -> Getting Any s2 a -> m Bool
 hasM getter prism = getter ~> \g -> pure (has prism g)
 
