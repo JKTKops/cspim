@@ -21,9 +21,11 @@ import Data.DList
 import Data.Function ((&))
 import Data.WordUtils
 import Data.Maybe (fromMaybe)
+import Data.Text (pack)
 import qualified Data.Map as M
 
 import Control.Monad.RWS.Strict
+import Control.Monad.Fail
 import Control.Lens
 
 mipsCodeGenProc :: Program -> Compiler [MipsLine]
@@ -42,6 +44,9 @@ instance Pretty CGError where
 newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) () Compiler) a }
   deriving ( Functor, Applicative, Monad, MonadCompiler
            , MonadReader SymbolTable, MonadWriter (DList MipsLine))
+
+instance MonadFail CodeGen where
+    fail = panic . pack
 
 unwrapCodeGen :: CodeGen a -> SymbolTable -> Compiler (a, [MipsLine])
 unwrapCodeGen (CG rwst) symtab =
@@ -207,6 +212,46 @@ assignConstToVar vloc vtype const
                       emit $ singleton $ instToLine store)
           (RegLoc reg) -> emit [mips| add ${reg}, $0, !{intValueOfConst const} |]
 
+-- | Assign the result of accessing an array to variable.
+--   Accepts the destination's memloc and type, the memloc of the array,
+--   the type of the array /elements/, and the var which is indexing the array.
+--
+--   An unfortunately extremely complicated function.
+assignArrToVar :: MemLoc -> Type -> MemLoc -> Type -> Var -> CodeGen ()
+assignArrToVar varloc varty arrloc arrty arrix
+    | isIntegralTy varty && isIntegralTy arrty = case arrloc of
+          (OffsetLoc off) -> (case arrix of
+              Right (IntConst i) -> do
+                  let offset = off + (fromIntegral i) * (fromIntegral $ sizeof arrty)
+                  if arrtyIsArrayType
+                    then emit [mips| addu ${compilerTemp1}, $fp, !{offset} |]
+                    else do
+                      load <- integralLoadInst arrty
+                                  <@> compilerTemp1
+                                  <@> Right (offset, RegFP)
+                      emit $ singleton $ instToLine load
+              Left uniq -> do
+                  reg <- loadNameWithDefault compilerTemp2 uniq
+                  case sllAlignment arrty of
+                      Nothing ->
+                          emit [mips| li ${compilerTemp2}, !{fromIntegral $ sizeof arrty}
+                                      mult ${compilerTemp2}, ${reg}
+                                      mflo ${compilerTemp2}
+                                    |]
+                      Just a -> emit [mips| sll ${compilerTemp2}, ${reg}, !{fromIntegral a} |]
+                  emit [mips| addu ${compilerTemp1}, $fp, !{off} |]
+                  emit [mips| addu ${compilerTemp1}, ${compilerTemp1}, ${compilerTemp2} |]
+                  if arrtyIsArrayType
+                    then pure ()
+                    else do
+                      load <- integralLoadInst arrty <@> compilerTemp1 <@> Right (0, RegFP)
+                      emit $ singleton $ instToLine load)
+             >> assignVarToVar varloc varty (RegLoc compilerTemp1) arrty
+
+  where arrtyIsArrayType | ArrTy _ _ <- arrty = True
+                         | otherwise          = False
+
+
 {- NOTE: [Mul instructions]
 
 Spim does overflow checking for mulo and mulou instructions, which we don't want to perform.
@@ -230,92 +275,95 @@ binopCodeGen lvalue b@(Binop lvar op rvar) = do
     (destReg, storeCode) <- chooseDestReg lvalue
     emit $ instruction destReg leftRsrc rightSrc2
     emit   storeCode
-
-
-  where getLeft (RVar (Left lu)) = loadNameWithDefault compilerTemp1 lu
-        getLeft (RVar (Right (IntConst c))) = do
-            emit [mips| li ${compilerTemp1}, !{fromIntegral c} |]
-            return compilerTemp1
-        getLeft (RVar (Right _)) = panic "binopCodeGen: left operand is non-integral constant"
-
-        getRight (RVar (Left ru)) = Left <$> loadNameWithDefault compilerTemp2 ru
-        getRight (RVar (Right (IntConst c))) = return $ Right $ fromIntegral c
-        getRight (RVar (Right _)) = panic "binopCodeGen: right operand is non-integral constant"
-
-        chooseDestReg (LVar u) = ask >>= \r ->
-            CG $ lift $ do
-                (reg, _, code) <- runRWST (unCG $ storeNameWithDefault compilerTemp1 u) r ()
-                return (reg, code)
-
-        loadNameWithDefault :: Reg -> Name -> CodeGen Reg
-        loadNameWithDefault = handleNameWithDefaultReg integralLoadInst
-
-        storeNameWithDefault :: Reg -> Name -> CodeGen Reg
-        storeNameWithDefault = handleNameWithDefaultReg integralStoreInst
-
-        handleNameWithDefaultReg :: (Type -> CodeGen (Reg -> Address -> MipsInstruction))
-                                 -> Reg -> Name -> CodeGen Reg
-        handleNameWithDefaultReg instFor def u = do
-            (loc, ty) <- askMemLocType u
-            case loc of
-                OffsetLoc off -> do
-                    handler <- instFor ty
-                    emit [instToLine $ handler def $ Right (off, RegFP)]
-                    return def
-                RegLoc reg -> return reg
-                _ -> panic "binopCodeGen: floating point/global variables not implemented"
-
-        selectBinopInst :: Binop -> Signage -> Signage -- signages of the operands
-                        -> CodeGen (RDest -> RSrc -> Src2 -> DList MipsLine)
-        selectBinopInst op lsign rsign = return $ case op of
-            Add -> instToLines -< MAddu
-            Sub -> instToLines -< MSubu
-            Mul -> mkMulCode
-            Div -> mkDivCode
-            Rem -> mkRemCode
-            ShiftR | lsign == Signed -> instToLines -< MSra
-                   | otherwise       -> instToLines -< MSrl
-            ShiftL              -> instToLines -< MSll
-            Le | eitherUnsigned -> instToLines -< MSleu
-               | otherwise      -> instToLines -< MSle
-            Lt | eitherUnsigned -> instToLines -< MSltu
-               | otherwise      -> instToLines -< MSlt
-            Ge | eitherUnsigned -> instToLines -< MSgeu
-               | otherwise      -> instToLines -< MSge
-            Gt | eitherUnsigned -> instToLines -< MSgtu
-               | otherwise      -> instToLines -< MSgt
-            Eq                  -> instToLines -< MSeq
-            Ne                  -> instToLines -< MSne
-
-          where eitherUnsigned = case (lsign, rsign) of
-                    (Signed, Signed) -> False
-                    _                -> True
-
-                (-<) :: (a -> b) -> (c -> d -> e -> a) -> c -> d -> e -> b
-                (-<) f g c d e = f (g c d e)
-                infixr 9 -<
-
-                mkMulCode :: RDest -> RSrc -> Src2 -> DList MipsLine
-                mkMulCode dest src1 src2 = fmap instToLine insts
-                  where insts = src2Insts <> multInsts
-                        (src2Insts, src2Reg) = case src2 of
-                            Left reg -> ([], reg)
-                            Right imm -> ([MLi compilerTemp2 imm], compilerTemp2)
-                        multInsts = [MMult src1 src2Reg, MMflo dest]
-
-                mkDivCode dest src1 src2 =
-                    [instToLine $ (if eitherUnsigned then MDivu else MDiv) dest src1 src2]
-
-                mkRemCode dest src1 src2 =
-                    [instToLine $ (if eitherUnsigned then MRemu else MRem) dest src1 src2]
-
-
-        getSignage :: RValue -> CodeGen Signage
-        getSignage (RVar (Left u)) = signageOf <$> askVarType u
-        getSignage (RVar (Right _)) = return Signed
-
-
 binopCodeGen _ _ = panic $ "binopCodeGen: RValue isn't a binop!"
+
+getLeft :: RValue -> CodeGen Reg
+getLeft (RVar (Left lu)) = loadNameWithDefault compilerTemp1 lu
+getLeft (RVar (Right (IntConst c))) = do
+    emit [mips| li ${compilerTemp1}, !{fromIntegral c} |]
+    return compilerTemp1
+getLeft (RVar (Right _)) = panic "getLeft: operand is non-integral constant"
+
+getRight :: RValue -> CodeGen (Either Reg Imm)
+getRight (RVar (Left ru)) = Left <$> loadNameWithDefault compilerTemp2 ru
+getRight (RVar (Right (IntConst c))) = return $ Right $ fromIntegral c
+getRight (RVar (Right _)) = panic "getRight: right operand is non-integral constant"
+
+-- | Given an LValue, choose the best register to send a result to this lvalue
+--   and also return the code for storing from that register.
+chooseDestReg :: LValue -> CodeGen (Reg, DList MipsLine)
+chooseDestReg (LVar u) = ask >>= \r ->
+    CG $ lift $ do
+    (reg, _, code) <- runRWST (unCG $ storeNameWithDefault compilerTemp1 u) r ()
+    return (reg, code)
+
+loadNameWithDefault :: Reg -> Name -> CodeGen Reg
+loadNameWithDefault = handleNameWithDefaultReg integralLoadInst
+
+storeNameWithDefault :: Reg -> Name -> CodeGen Reg
+storeNameWithDefault = handleNameWithDefaultReg integralStoreInst
+
+handleNameWithDefaultReg :: (Type -> CodeGen (Reg -> Address -> MipsInstruction))
+                         -> Reg -> Name -> CodeGen Reg
+handleNameWithDefaultReg instFor def u = do
+    (loc, ty) <- askMemLocType u
+    case loc of
+        OffsetLoc off -> do
+            handler <- instFor ty
+            emit [instToLine $ handler def $ Right (off, RegFP)]
+            return def
+        RegLoc reg -> return reg
+        _ -> panic "binopCodeGen: floating point/global variables not implemented"
+
+selectBinopInst :: Binop -> Signage -> Signage -- signages of the operands
+                -> CodeGen (RDest -> RSrc -> Src2 -> DList MipsLine)
+selectBinopInst op lsign rsign = return $ case op of
+    Add -> instToLines -< MAddu
+    Sub -> instToLines -< MSubu
+    Mul -> mkMulCode
+    Div -> mkDivCode
+    Rem -> mkRemCode
+    ShiftR | lsign == Signed -> instToLines -< MSra
+           | otherwise       -> instToLines -< MSrl
+    ShiftL              -> instToLines -< MSll
+    Le | eitherUnsigned -> instToLines -< MSleu
+       | otherwise      -> instToLines -< MSle
+    Lt | eitherUnsigned -> instToLines -< MSltu
+       | otherwise      -> instToLines -< MSlt
+    Ge | eitherUnsigned -> instToLines -< MSgeu
+       | otherwise      -> instToLines -< MSge
+    Gt | eitherUnsigned -> instToLines -< MSgtu
+       | otherwise      -> instToLines -< MSgt
+    Eq                  -> instToLines -< MSeq
+    Ne                  -> instToLines -< MSne
+
+  where eitherUnsigned = case (lsign, rsign) of
+            (Signed, Signed) -> False
+            _                -> True
+
+        (-<) :: (a -> b) -> (c -> d -> e -> a) -> c -> d -> e -> b
+        (-<) f g c d e = f (g c d e)
+        infixr 9 -<
+
+        mkMulCode :: RDest -> RSrc -> Src2 -> DList MipsLine
+        mkMulCode dest src1 src2 = fmap instToLine insts
+          where insts = src2Insts <> multInsts
+                (src2Insts, src2Reg) = case src2 of
+                    Left reg -> ([], reg)
+                    Right imm -> ([MLi compilerTemp2 imm], compilerTemp2)
+                multInsts = [MMult src1 src2Reg, MMflo dest]
+
+        mkDivCode dest src1 src2 =
+            [instToLine $ (if eitherUnsigned then MDivu else MDiv) dest src1 src2]
+
+        mkRemCode dest src1 src2 =
+            [instToLine $ (if eitherUnsigned then MRemu else MRem) dest src1 src2]
+
+
+getSignage :: RValue -> CodeGen Signage
+getSignage (RVar (Left u)) = signageOf <$> askVarType u
+getSignage (RVar (Right _)) = return Signed
+
 
 -- | Generates assembly for the (LIxArr n ix := RValue) case.
 assignToArr :: Name -> Var -> RValue -> CodeGen ()
@@ -368,6 +416,9 @@ setRVCodeGen (RVar (Right const))
   | IntConst i <- const = assignConstToVar (RegLoc RegV0) (IntTy signage) const
   | otherwise = panic "returning non-integral constants not implemented"
   where signage = if intValueOfConst const < 0 then Signed else Unsigned
+setRVCodeGen (RIxArr uniq ixvar) = do
+    (memloc, ArrTy _ ty) <- askMemLocType uniq
+    assignArrToVar (RegLoc RegV0) ty memloc ty ixvar
 
 -- | Generate code for returning from a function. Reloads saved registers,
 --   and cleans up the stack frame. Does /not/ set $v0; SetRV instructions set the return value.

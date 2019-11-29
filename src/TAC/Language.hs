@@ -157,6 +157,7 @@ isIntegralTy :: Type -> Bool
 isIntegralTy (IntTy _)   = True
 isIntegralTy (ShortTy _) = True
 isIntegralTy (CharTy _)  = True
+isIntegralTy (ArrTy _ _) = True -- this is a pointer type, which is integral
 isIntegralTy _ = False
 
 signageOf :: Type -> Signage
