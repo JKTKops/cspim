@@ -37,7 +37,7 @@ reserved :: Monad m => String -> Lexer u m ()
 reserved s = lexeme (string s *> notFollowedBy alphaNum) <?> "`" ++ s ++ "'"
 
 reservedOp :: Monad m => String -> Lexer u m ()
-reservedOp s = lexeme (string s) $> () <?> "`" ++ s ++ "'"
+reservedOp s = lexeme (string s <* notFollowedBy (T.opLetter cStyle)) $> () <?> "`" ++ s ++ "'"
 
 identifier :: Monad m => Lexer u m String
 identifier = lexeme (p >>= check) <?> "identifier"

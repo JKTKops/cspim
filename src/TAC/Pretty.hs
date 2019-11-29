@@ -3,7 +3,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
-module TAC.Pretty where
+module TAC.Pretty
+    ( prettyProgram
+    , prettyInsn
+    , prettyRValue
+    , prettyTacExp
+    ) where
 
 import GHC.Exts (Constraint)
 
@@ -141,10 +146,16 @@ pprRValue :: SymTabReader m => RValue -> m Doc
 pprRValue (RVar var) = ppr var
 pprRValue (RIxArr name ix) = (\name ix -> name <> brackets ix) <$> ppr name <*> ppr ix
 
+prettyRValue :: SymTabReader m => RValue -> m String
+prettyRValue = fmap render . pprRValue
+
 pprTacExp :: SymTabReader m => TacExp -> m Doc
 pprTacExp (ValExp rv)    = ppr rv
-pprTacExp (Binop l op r) = liftM2 (<+>) (liftM2 (<+>) (ppr l) (ppr op)) (ppr r)
+pprTacExp (Binop l op r) = hsep <$> sequence [ppr l, ppr op, ppr r]
 pprTacExp (Monop op var) = liftM2 (<>) (ppr op) (ppr var)
+
+prettyTacExp :: SymTabReader m => TacExp -> m String
+prettyTacExp = fmap render . pprTacExp
 
 pprSignage :: Applicative f => Signage -> f Doc
 pprSignage Signed   = pure $ text "signed"

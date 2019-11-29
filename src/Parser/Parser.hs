@@ -94,14 +94,12 @@ statementList :: Parser (Graph Insn O O)
 statementList = foldr (<*|*>) emptyGraph <$> many statement
 
 statement :: Parser (Graph Insn O O)
-statement = ((assign <|> retStmt <|> declare <|> pure emptyGraph) <* semi) <|> block
+statement = ((expr <|> retStmt <|> declare <|> pure emptyGraph) <* semi) <|> block
 
-assign :: Parser (Graph Insn O O)
-assign = do
-    lname <- identifier >>= uniqueOf
-    reservedOp "="
-    Expr exprGraph finalTacExp _ <- parseExpr
-    return $ exprGraph <*|*> mkMiddle (LVar lname := finalTacExp)
+expr :: Parser (Graph Insn O O)
+expr = do
+    Expr exprGraph _ _ <- parseExpr
+    return exprGraph
 
 retStmt :: Parser (Graph Insn O O)
 retStmt = do

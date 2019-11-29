@@ -32,6 +32,7 @@ import Data.Functor (($>), (<&>))
 import Data.Maybe (isJust)
 
 import Control.Monad.State hiding (fail)
+import Control.Monad.Reader
 import Control.Monad.Extra
 import Control.Applicative (Alternative, (<|>))
 import Control.Lens hiding (assign)
@@ -70,6 +71,13 @@ data ParserState = PS
     }
 
 makeLenses ''ParserState
+
+instance MonadReader SymbolTable Parser where
+    ask = gets _symTab
+
+    local f p = do
+        tab <- ask
+        (symTab %= f) *> p <* (symTab .= tab)
 
 runParser :: Parser a -> SourceName -> Text -> Compiler a
 runParser p fname src = do

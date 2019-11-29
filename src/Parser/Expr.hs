@@ -1,12 +1,19 @@
-module Parser.Expr where
+module Parser.Expr
+    ( Expr(..)
+    , parseExpr
+    , parseRValue
+    ) where
+
+import Pretty
+import TAC.Pretty
 
 import Text.Parsec.Expr hiding (Operator)
 import qualified Text.Parsec.Expr as Parsec
 import Text.Parsec hiding ((<|>))
-import Data.Text (unpack, Text)
+import Data.Text (pack, Text)
 
 import Parser.Monad
-import Compiler.Monad (Compiler)
+import Compiler.Monad
 import TAC.Program
 
 import Control.Monad (join)
@@ -22,7 +29,11 @@ type ParsedExpr = Parser Expr
 type Operator = Parsec.Operator Text ParserState Compiler ParsedExpr
 
 parseExpr :: Parser Expr
-parseExpr = join $ P $ buildExpressionParser opTableBelowTernary term
+parseExpr = join $ P $ buildExpressionParser opTableAboveTernary under
+  where under = pure <$> unP parseExprBelowTernary
+
+parseExprBelowTernary :: Parser Expr
+parseExprBelowTernary = join $ P $ buildExpressionParser opTableBelowTernary term
 
 -- TODO!!! Fix type!!!
 term :: ParsecT Text ParserState Compiler ParsedExpr
@@ -36,7 +47,8 @@ parseRValue = RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntCon
 opTableAboveTernary :: [[Operator]]
 opTableAboveTernary = [p14, p15]
   where p15 = []
-        p14 = []
+        p14 = [ assignOp, addAssign, subAssign, timesAssign
+              , divAssign, remAssign, shiftlAssign, shiftrAssign]
 
 opTableBelowTernary :: [[Operator]]
 opTableBelowTernary = [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12]
@@ -76,34 +88,78 @@ eqOp, neOp :: Operator
 eqOp = binary "==" Eq AssocLeft
 neOp = binary "!=" Ne AssocLeft
 
+assignOp, addAssign, subAssign, timesAssign      :: Operator
+divAssign, remAssign, shiftlAssign, shiftrAssign :: Operator
+assignOp = assign "=" Nothing
+addAssign    = assign "+=" (Just Add)
+subAssign    = assign "-=" (Just Sub)
+timesAssign  = assign "*=" (Just Mul)
+divAssign    = assign "/=" (Just Div)
+remAssign    = assign "%=" (Just Rem)
+shiftlAssign = assign "<<=" (Just ShiftL)
+shiftrAssign = assign ">>=" (Just ShiftR)
+
 binary :: String -> Binop -> Assoc -> Operator
 binary name op = Infix parse
   where
     parse :: ParsecT Text ParserState Compiler (ParsedExpr -> ParsedExpr -> ParsedExpr)
-    parse = unP $ reservedOp name >> connect
+    parse = unP $ reservedOp name >> connectBinop op
 
-    connect :: Parser (ParsedExpr -> ParsedExpr -> ParsedExpr)
-    connect = pure $ \e1 e2 -> do
-        Expr lg lr lty <- e1
-        Expr rg rr rty <- e2
-        let outTy = commonRealType lty rty
-        (gatherLeft, leftValue) <- case lr of
-            ValExp rv -> return (emptyGraph, rv)
-            _ -> do ltemp <- mkFreshLocalTempUniq lty
-                    return (mkMiddle $ LVar ltemp := lr, RVar (Left ltemp))
-        (gatherRight, rightValue) <- case rr of
-            ValExp rv -> return (emptyGraph, rv)
-            _ -> do rtemp <- mkFreshLocalTempUniq rty
-                    return (mkMiddle $ LVar rtemp := rr, RVar (Left rtemp))
-        return $ Expr (lg <*|*> gatherLeft <*|*> rg <*|*> gatherRight)
-                      (Binop leftValue op rightValue)
-                      outTy
+assign :: String -> Maybe Binop -> Operator
+assign name op = Infix parse AssocRight
+  where parse = unP $ reservedOp name >> connectAssign op
 
-commonRealType :: Type -> Type -> Type
+connectBinop :: Binop -> Parser (ParsedExpr -> ParsedExpr -> ParsedExpr)
+connectBinop op = pure $ \e1 e2 -> do
+    Expr lg lr lty <- e1
+    Expr rg rr rty <- e2
+    outTy <- commonRealType lty rty
+    (gatherLeft, leftValue) <- gather lr lty
+    (gatherRight, rightValue) <- gather rr rty
+    return $ Expr (lg <*|*> gatherLeft <*|*> rg <*|*> gatherRight)
+                  (Binop leftValue op rightValue)
+                  outTy
+
+connectAssign :: Maybe Binop -> Parser (ParsedExpr -> ParsedExpr -> ParsedExpr)
+connectAssign mop = pure $ \e1 e2 -> do
+    Expr lg lr lty <- e1
+    case lr of
+        ValExp _ -> pure ()
+        _ -> do notLValue <- prettyTacExp lr
+                fail $ notLValue ++ " is not an lvalue"
+    Expr rg rr rty <- e2
+    let outTy = lty
+    (gatherLeft, leftValue) <- gather lr lty
+    (gatherRight, rightValue) <- gather rr rty
+    lvalue <- lvalueOfRValue leftValue
+    let rhs = case mop of
+            Nothing -> ValExp rightValue
+            Just op -> Binop leftValue op rightValue
+    return $ Expr (rg <*|*> gatherRight -- right-to-left to match gcc
+                      <*|*> lg
+                      <*|*> gatherLeft
+                      <*|*> mkMiddle (lvalue := rhs))
+                  (ValExp leftValue)
+                  outTy
+  where
+    lvalueOfRValue :: RValue -> Parser LValue
+    lvalueOfRValue (RVar (Left v)) = return $ LVar v
+    lvalueOfRValue (RIxArr n v) = return $ LIxArr n v
+    lvalueOfRValue r@(RVar (Right _)) = do
+        notLValue <- prettyRValue r
+        fail $ notLValue <> " is not an lvalue"
+
+gather :: TacExp -> Type -> Parser (Graph Insn O O, RValue)
+gather (ValExp rv) _ = return (emptyGraph, rv)
+gather exp ty          = do
+    temp <- mkFreshLocalTempUniq ty
+    return (mkMiddle $ LVar temp := exp, RVar (Left temp))
+
+commonRealType :: Type -> Type -> Parser Type
 commonRealType ty1 ty2
     | isIntegralTy ty1
-    , isIntegralTy ty2 = makeSignageAgree (promote ty1) (promote ty2)
-    | otherwise = error "Parser.Expr.commonRealType: Non-integral types"
+    , isIntegralTy ty2 = pure $ makeSignageAgree (promote ty1) (promote ty2)
+    | otherwise = panic "Parser.Expr.commonRealType: Non-integral types"
 
   where promote :: Type -> Type
         promote (IntTy Unsigned) = IntTy Unsigned
