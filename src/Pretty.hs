@@ -21,3 +21,8 @@ instance Pretty a => Pretty [a] where
 instance Pretty Char where
     pretty = singleton
     prettyList = pack
+
+instance Pretty Int where
+    pretty = pack . show
+instance Pretty Integer where
+    pretty = pack . show

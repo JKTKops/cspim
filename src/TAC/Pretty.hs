@@ -186,6 +186,17 @@ instance Ppr Int where
 instance Ppr Label where
     ppr lbl = text <$> askLabelName lbl
 
+instance Pretty Type where
+    pretty (CharTy signage) = pretty signage <> " char"
+    pretty (ShortTy signage) = pretty signage <> " short"
+    pretty (IntTy signage)   = pretty signage <> " int"
+    pretty FloatTy           = "float"
+    pretty DoubleTy          = "double"
+    pretty (ArrTy l ty)      = pretty ty <> "[" <> pretty l <> "]"
+instance Pretty Signage where
+    pretty Signed   = "signed"
+    pretty Unsigned = "unsigned"
+
 askVarName :: SymTabReader m => Unique -> m String
 askVarName n = askVarNameM n >>= \case
     Nothing -> return $ "$genName_" ++ show n

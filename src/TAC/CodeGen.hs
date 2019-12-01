@@ -173,6 +173,12 @@ assignCodeGen lvalue exp =
                 LVar luniq -> do
                     (lMemLoc, lType) <- askMemLocType luniq
                     assignConstToVar lMemLoc lType const
+        (ValExp (RIxArr runiq ixvar)) -> do
+            (rMemLoc, ArrTy _ arrTy) <- askMemLocType runiq
+            case lvalue of
+                LVar luniq -> do
+                    (lMemLoc, lType) <- askMemLocType luniq
+                    assignArrToVar lMemLoc lType rMemLoc arrTy ixvar
 
         b@(Binop _ _ _) -> binopCodeGen lvalue b
 
@@ -231,20 +237,21 @@ assignArrToVar varloc varty arrloc arrty arrix
                                   <@> Right (offset, RegFP)
                       emit $ singleton $ instToLine load
               Left uniq -> do
-                  reg <- loadNameWithDefault compilerTemp2 uniq
+                  reg <- loadNameWithDefault compilerTemp1 uniq
                   case sllAlignment arrty of
                       Nothing ->
-                          emit [mips| li ${compilerTemp2}, !{fromIntegral $ sizeof arrty}
-                                      mult ${compilerTemp2}, ${reg}
-                                      mflo ${compilerTemp2}
+                          emit [mips| li ${compilerTemp1}, !{fromIntegral $ sizeof arrty}
+                                      mult ${compilerTemp1}, ${reg}
+                                      mflo ${compilerTemp1}
                                     |]
-                      Just a -> emit [mips| sll ${compilerTemp2}, ${reg}, !{fromIntegral a} |]
-                  emit [mips| addu ${compilerTemp1}, $fp, !{off} |]
-                  emit [mips| addu ${compilerTemp1}, ${compilerTemp1}, ${compilerTemp2} |]
+                      Just a -> emit [mips| sll ${compilerTemp1}, ${reg}, !{fromIntegral a} |]
+                  emit [mips| addu ${compilerTemp1}, ${compilerTemp1}, $fp |]
+                  when (off /= 0) $ emit [mips| addu ${compilerTemp1}, ${compilerTemp1}, !{off} |]
                   if arrtyIsArrayType
                     then pure ()
                     else do
-                      load <- integralLoadInst arrty <@> compilerTemp1 <@> Right (0, RegFP)
+                      load <- integralLoadInst arrty <@> compilerTemp1
+                                                     <@> Right (0, compilerTemp1)
                       emit $ singleton $ instToLine load)
              >> assignVarToVar varloc varty (RegLoc compilerTemp1) arrty
 
@@ -375,13 +382,15 @@ integralLoadInst (ShortTy Signed)   = pure MLh
 integralLoadInst (ShortTy Unsigned) = pure MLhu
 integralLoadInst (CharTy Signed)    = pure MLb
 integralLoadInst (CharTy Unsigned)  = pure MLbu
-integralLoadInst _ = panic "TAC.CodeGen.integralLoadInst: Non-integral type!"
+integralLoadInst ty = panic $ "TAC.CodeGen.integralLoadInst: Non-integral type! "
+                           <> "(" <> pretty ty <> ")"
 
 integralStoreInst :: Type -> CodeGen (RSrc -> Address -> MipsInstruction)
 integralStoreInst (IntTy _) = pure MSw
 integralStoreInst (ShortTy _) = pure MSh
 integralStoreInst (CharTy _) = pure MSb
-integralStoreInst _ = panic "TAC.CodeGen.integralStoreInst: Non-integral type!"
+integralStoreInst ty = panic $ "TAC.CodeGen.integralStoreInst: Non-integral type! "
+                            <> "(" <> pretty ty <> ")"
 
 -- | Generates code for a 'retrieve v' instruction.
 retrieveCodeGen :: Name -> CodeGen ()

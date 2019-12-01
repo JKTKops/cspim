@@ -1,3 +1,5 @@
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
@@ -6,8 +8,8 @@ module Compiler.Monad.Class
       These(..)
 
     -- * The Compiler monad and the MonadCompiler classes
-    , Compiler(..), runCompiler
-    , MonadCompiler(..)
+    , Compiler(..), runCompiler, runCompilerIO, testCompilerIO
+    , MonadCompiler(verboseLog, compilerWarnings, compilerErrors, compilerFlags)
     , FullMonadCompiler(..)
 
     -- * Nice functions for emitting singleton errors/warnings
@@ -17,11 +19,14 @@ module Compiler.Monad.Class
 
     -- * Throw any string as an error, generally indicating an invariant violation.
     , panic
+
     ) where
 
 import Pretty
 import Compiler.Error
 import Compiler.Flags
+import Compiler.Monad.UniqueSupply
+import qualified Compiler.Hoopl as Hoopl
 import Data.DList
 
 import Data.Function ((&))
@@ -67,6 +72,13 @@ class Monad m => MonadCompiler m where
     compilerErrors   :: DList CErr -> m a
     compilerFlags    :: m Flags
 
+    freshLabel  :: m Hoopl.Label
+    freshUnique :: m Hoopl.Unique
+
+
+instance {-# OVERLAPPABLE #-} (Monad m, MonadCompiler m) => Hoopl.UniqueMonad m where
+    freshUnique = Compiler.Monad.Class.freshUnique
+
 -- | Raise a single warning.
 compilerWarning :: (MonadCompiler m, CompileError e) => e -> m ()
 compilerWarning = compilerWarnings . singleton . CErr Warning
@@ -96,7 +108,7 @@ class MonadCompiler m => FullMonadCompiler m where
 
 -- | The monadic type of compilation actions. Compilation actions have access to the
 --   compilation flags, can raise warnings, and can throw errors.
-newtype Compiler a = C { unC :: ReaderT Flags (Validate (DList CErr)) a }
+newtype Compiler a = C { unC :: ReaderT Flags (ValidateT (DList CErr) UniqueSM) a }
   deriving (Functor, Applicative, Monad)
 
 -- | Run a compilation action with the given flags, returning either:
@@ -106,8 +118,22 @@ newtype Compiler a = C { unC :: ReaderT Flags (Validate (DList CErr)) a }
 --   'These' errs a - the result of the action, and a (nonempty-)list of compilation warnings
 --
 --   'That' a       - the result of the action, which completed with no errors or warnings.
-runCompiler :: Compiler a -> Flags -> These [CErr] a
-runCompiler (C m) flags = runReaderT m flags & evalValidate & first toList
+runCompiler :: Compiler a -> UniqueSupply -> Flags -> These [CErr] a
+runCompiler (C m) us flags = runReaderT m flags & evalValidateT & evalUniqueSM us & first toList
+
+-- | Run a compiler in the IO monad, using the standard unique supply.
+runCompilerIO :: Compiler a -> Flags -> IO (These [CErr] a)
+runCompilerIO c flags = do
+    us <- mkUniqueSupply
+    return $ runCompiler c us flags
+
+-- | Use this in functions that need to test run compilers.
+--   It resets the gensym to counter 0 and inc 1, then calls runCompilerIO.
+testCompilerIO :: Compiler a -> Flags -> IO (These [CErr] a)
+testCompilerIO c flags = do
+    initGenSym 0 1
+    runCompilerIO c flags
+
 
 instance MonadCompiler Compiler where
     verboseLog s = C $ dispute $ singleton $ CErr VerboseLog (VL s)
@@ -119,16 +145,22 @@ instance MonadCompiler Compiler where
       where toError (CErr _ e) = CErr Error e
     compilerFlags    = C ask
 
+    freshUnique = C $ lift $ lift Hoopl.freshUnique
+    freshLabel = C $ lift $ lift Hoopl.freshLabel
+
 instance FullMonadCompiler Compiler where
     runMonadCompiler (C m) = C $ do
+        us0   <- lift $ lift getUniqueSupplyM
         flags <- ask
-        return $ runReaderT m flags & evalValidate
+        return $ runReaderT m flags & evalValidateT & evalUniqueSM us0
 
 instance MonadCompiler m => MonadCompiler (ReaderT r m) where
     verboseLog       = lift . verboseLog
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance FullMonadCompiler m => FullMonadCompiler (ReaderT r m) where
     runMonadCompiler = mapReaderT runMonadCompiler
@@ -138,6 +170,8 @@ instance MonadCompiler m => MonadCompiler (ExceptT e m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance FullMonadCompiler m => FullMonadCompiler (ExceptT e m) where
     runMonadCompiler = mapExceptT $ \this -> this >>= \case
@@ -149,6 +183,8 @@ instance (MonadCompiler m, Monoid w) => MonadCompiler (Lazy.WriterT w m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance (FullMonadCompiler m, Monoid w) => FullMonadCompiler (Lazy.WriterT w m) where
     runMonadCompiler = Lazy.mapWriterT $ \this -> do
@@ -161,6 +197,8 @@ instance (MonadCompiler m, Monoid w) => MonadCompiler (Strict.WriterT w m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance (FullMonadCompiler m, Monoid w) => FullMonadCompiler (Strict.WriterT w m) where
     runMonadCompiler = Strict.mapWriterT $ \this -> do
@@ -173,6 +211,8 @@ instance MonadCompiler m => MonadCompiler (Lazy.StateT s m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance FullMonadCompiler m => FullMonadCompiler (Lazy.StateT s m) where
     runMonadCompiler = Lazy.mapStateT $ \this -> do
@@ -185,6 +225,8 @@ instance MonadCompiler m => MonadCompiler (Strict.StateT s m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance FullMonadCompiler m => FullMonadCompiler (Strict.StateT s m) where
     runMonadCompiler = Strict.mapStateT $ \this -> do
@@ -197,6 +239,8 @@ instance (MonadCompiler m, Monoid w) => MonadCompiler (Lazy.RWST r w s m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance (FullMonadCompiler m, Monoid w) => FullMonadCompiler (Lazy.RWST r w s m) where
     runMonadCompiler = Lazy.mapRWST $ \this -> do
@@ -209,6 +253,8 @@ instance (MonadCompiler m, Monoid w) => MonadCompiler (Strict.RWST r w s m) wher
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 instance (FullMonadCompiler m, Monoid w) => FullMonadCompiler (Strict.RWST r w s m) where
     runMonadCompiler = Strict.mapRWST $ \this -> do
@@ -221,6 +267,8 @@ instance MonadCompiler m => MonadCompiler (ParsecT s u m) where
     compilerWarnings = lift . compilerWarnings
     compilerErrors   = lift . compilerErrors
     compilerFlags    = lift compilerFlags
+    freshLabel       = lift freshLabel
+    freshUnique      = lift freshUnique
 
 evalValidateT :: Functor m => ValidateT e m a -> m (These e a)
 evalValidateT m = V.unValidateT V.MNothing m <&> \case

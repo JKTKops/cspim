@@ -9,7 +9,7 @@ import TAC.Pretty
 
 import Text.Parsec.Expr hiding (Operator)
 import qualified Text.Parsec.Expr as Parsec
-import Text.Parsec hiding ((<|>))
+import Text.Parsec hiding ((<|>), (<?>))
 import Data.Text (pack, Text)
 
 import Parser.Monad
@@ -29,7 +29,7 @@ type ParsedExpr = Parser Expr
 type Operator = Parsec.Operator Text ParserState Compiler ParsedExpr
 
 parseExpr :: Parser Expr
-parseExpr = join $ P $ buildExpressionParser opTableAboveTernary under
+parseExpr = join (P $ buildExpressionParser opTableAboveTernary under) <?> "expression"
   where under = pure <$> unP parseExprBelowTernary
 
 parseExprBelowTernary :: Parser Expr

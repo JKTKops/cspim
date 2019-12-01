@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Parser.Parser (parseC) where
 
 import TAC.Program as TAC hiding (NoChange, globalVars)
@@ -16,6 +15,7 @@ import Compiler.SymbolTable
 
 import Parser.Monad
 import Parser.Expr
+import Parser.Type
 import qualified Text.Parsec as P
 
 import qualified Data.Map as M
@@ -78,6 +78,8 @@ mainFunction = do
     let graph = mkFirst (Label entLbl)
                 <*|*> mkMiddle (Enter main_uniq)
                 <*|*> body
+                -- main always returns 0 if it reaches the end
+                <*|*> mkMiddle (SetRV (RVar (Right $ IntConst 0)))
                 <*|*> mkLast (Return main_uniq)
         fn = Fn { _name = main_uniq, _args = []
                 , _locals = main_lcls, _stackFrame = stackFrame
@@ -88,19 +90,49 @@ mainFunction = do
     symTab ~> return . Prog [fn] [] []
 
 block :: Parser (Graph Insn O O)
-block = pushNewScope *> braces statementList <* popTopScope
+block = pushNewScope *> braces blockItemList <* popTopScope
 
-statementList :: Parser (Graph Insn O O)
-statementList = foldr (<*|*>) emptyGraph <$> many statement
+blockItem :: Parser (Graph Insn O O)
+blockItem = statement <|> declare
+
+blockItemList :: Parser (Graph Insn O O)
+blockItemList = foldr (<*|*>) emptyGraph <$> many blockItem
 
 statement :: Parser (Graph Insn O O)
-statement = ((expr <|> retStmt <|> declare <|> pure emptyGraph) <* semi) <|> block
+statement = expecting "statement" $
+            labeledStatement
+        <|> (exprStmt <|> retStmt
+                      <|> gotoStmt
+                      <|> semi $> emptyGraph)
+        <|> block
+-- TODO NEXT: make compiler a UniqueMonad, make parser leech off that,
+-- re-combine Return and SetRV, have code generator generate a return label at the
+-- end of each function and put the returning code there
+-- i.e. assign $v0; goto $L15; $L15: ... # start return sequence
+-- A mips optimizer in the future could do small-block catentation if desired.
 
-expr :: Parser (Graph Insn O O)
-expr = do
+-- | Parse a labeled statement.
+--   TODO: Labels include switch statement `case` and `default` labels.
+labeledStatement :: Parser (Graph Insn O O)
+labeledStatement = do
+    lblName <- try $ identifier <* reservedOp ":" <?> "label"
+    lbl <- labelFor lblName
+    stmtG <- statement
+    let graph = mkBranch lbl |*><*| mkLabel lbl <*|*> stmtG
+    return graph
+
+-- | Parse an expression and retrieve the graph, throwing away the resulting TacExp
+--   and its type.
+exprStmt :: Parser (Graph Insn O O)
+exprStmt = do
     Expr exprGraph _ _ <- parseExpr
     return exprGraph
 
+-- | Parse a return statement.
+--
+--   Every distinct return statement creates its own return instruction. Optimizations
+--   are expected to eliminate the duplication if the return instructions are expected
+--   to turn into many MIPS instructions.
 retStmt :: Parser (Graph Insn O O)
 retStmt = do
     reserved "return"
@@ -115,11 +147,14 @@ retStmt = do
     postLbl <- freshLabel
     return $ (setRv <*|*> mkLast (Return fname)) |*><*| mkLabel postLbl
 
+-- | Parse a simple declaration, possibly with an initializer.
+--   TODO: switch to type specifier/declaration specifier model;
+--   entry point for function definitions
 declare :: Parser (Graph Insn O O)
 declare = do
-    reserved "int"
+    ty   <- parseType
     name <- identifier
-    uniq <- mkFreshLocalUniq name (IntTy Signed)
+    uniq <- mkFreshLocalUniq name ty
     m_g <- optionMaybe $ declaratorAssignment (LVar uniq)
     case m_g of
         Just graph -> pure graph
@@ -130,6 +165,14 @@ declaratorAssignment lval = do
     reservedOp "="
     Expr exprGraph finalTacExp _ <- parseExpr
     return $ exprGraph <*|*> mkMiddle (lval := finalTacExp)
+
+gotoStmt :: Parser (Graph Insn O O)
+gotoStmt = do
+    reserved "goto"
+    lblName <- identifier
+    lbl <- labelFor lblName
+    fakeLbl <- freshLabel
+    return $ mkBranch lbl |*><*| mkLabel fakeLbl
 
 -- Even if we should generate a TacExp here with the output of the final computation
 -- we can't always do that because sometimes we need just the RValue (e.x. returning).
@@ -149,7 +192,9 @@ parseTacExp = ValExp <$> parseRValue
 --------------------------------------------------------------------------------------
 
 testParser :: Show a => Parser a -> Text -> IO String
-testParser p src = case flip runCompiler noFlags $ runParser p "test" src of
-   This errs -> mapM_ (T.putStrLn . pretty) errs >> return ""
-   These errs a -> mapM_ (T.putStrLn . pretty) errs >> return (show a)
-   That a -> return (show a)
+testParser p src = do
+    result <- testCompilerIO (runParser p "test" src) noFlags
+    case result of
+        This errs -> mapM_ (T.putStrLn . pretty) errs >> return ""
+        These errs a -> mapM_ (T.putStrLn . pretty) errs >> return (show a)
+        That a -> return (show a)

@@ -60,8 +60,8 @@ compile opts filename =
 runPipeline :: Options -> Phase -> FilePath -> IO ()
 runPipeline opts startPhase fname = do
     source <- T.readFile fname
-    let result = runCompiler (compileAction source) (opts^.flags)
-        outFile = fromMaybe (dropExtension fname <.> outputExt) (opts^.outputFile)
+    result <- runCompilerIO (compileAction source) (opts^.flags)
+    let outFile = fromMaybe (dropExtension fname <.> outputExt) (opts^.outputFile)
     case result of
         This err    -> exitWithCompileError err
         That result -> T.writeFile outFile result

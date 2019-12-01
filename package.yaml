@@ -9,6 +9,7 @@ copyright:           "2019 Max Kopinsky"
 extra-source-files:
 - README.md
 - ChangeLog.md
+- src/Compiler/Monad/GenSym.c
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -29,6 +30,7 @@ dependencies:
 
 library:
   source-dirs:           src/
+  c-sources:             src/Compiler/Monad/GenSym.c
   dependencies:
   - ansi-terminal >= 0.9
   - array

@@ -1,4 +1,3 @@
--- | TODO: Why tf is the parser monad a unique monad instead of the /compiler/ monad?
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -6,7 +5,7 @@
 module Parser.Monad
     ( module Parser.Monad
     , (<|>)
-    )where
+    ) where
 
 import Pretty
 
@@ -50,10 +49,6 @@ instance Pretty ParseError where pretty = T.pack . show
 instance CompileError ParseError where
     flagAffects _ _ = NoChange
 
-instance UniqueMonad Parser where
-    freshUnique = state $ \ps -> let (u:us) = _freshUniques ps
-                                 in (u, ps { _freshUniques = us })
-
 type NameMap = M.Map String Unique
 
 data ParserState = PS
@@ -66,8 +61,6 @@ data ParserState = PS
     , _funName       :: Maybe Unique
     , _symTab        :: SymbolTable
     , _funLocals     :: [Unique]           -- all the local variables created in this function
-
-    , _freshUniques  :: [Unique]
     }
 
 makeLenses ''ParserState
@@ -87,27 +80,37 @@ runParser p fname src = do
         Right prog -> return prog
 
 emptyParserState :: ParserState
-emptyParserState = PS mapEmpty mapEmpty [] Nothing emptyTable [] [1..]
+emptyParserState = PS mapEmpty mapEmpty [] Nothing emptyTable []
 
 data CustomParseError
-     = VariableNotInScope String
+     = VariableNotInScope P.SourcePos String
 
 instance Pretty CustomParseError where
-    pretty (VariableNotInScope str) = T.pack $ "Out of scope variable: `" <> str <> "'"
+    pretty (VariableNotInScope p str) = T.pack $ show p <> ": Out of scope variable: `"
+                                                        <> str <> "'"
 
 instance CompileError CustomParseError where
-    flagAffects FDeferOutOfScopeErrors (VariableNotInScope _) = E2Warning
+    flagAffects FDeferOutOfScopeErrors (VariableNotInScope _ _) = E2Warning
     flagAffects _ _ = NoChange
 
 customParseWarning :: CustomParseError -> Parser ()
 customParseWarning = compilerWarning
 
 customParseError :: CustomParseError -> Parser a
-customParseError = compilerError
+customParseError = fail . T.unpack . pretty
 
 instance MonadState ParserState Parser where
     get = P getState
     put = P . putState
+
+(<?>) :: Parser a -> String -> Parser a
+(<?>) parser lbl = P (unP parser P.<?> lbl)
+
+expecting :: String -> Parser a -> Parser a
+expecting lbl p = p <?> lbl
+
+try :: Parser a -> Parser a
+try = P . P.try . unP
 
 parens, braces, brackets, angles :: Parser a -> Parser a
 parens   = P . P.between (L.symbol "(") (L.symbol ")") . unP
@@ -222,7 +225,8 @@ uniqueOf name = do
     case m_uniq of
         Just uniq -> return uniq
         Nothing   -> do
-            customParseWarning $ VariableNotInScope name
+            pos <- P P.getPosition
+            customParseWarning $ VariableNotInScope pos name
             freshUnique
 
 searchLocalVarStack :: String -> [NameMap] -> Maybe Unique
@@ -287,7 +291,7 @@ runAllocT (AT action) = runStateT action 0
 addrFor :: Monad m => Type -> AllocT m Int32
 addrFor ty = (AT $ do
     current <- get
-    let addr = alignOffset current 4
+    let addr = alignOffset current $ fromIntegral $ sizeof ty
     state $ const (addr, addr)) <* consumeType ty
 
 consumeSize :: Monad m => Int -> AllocT m ()

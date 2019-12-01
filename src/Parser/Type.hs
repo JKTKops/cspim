@@ -63,8 +63,13 @@ resolveType (RType ty)        = const ty
 makeLenses ''ResolvingTypeSpecifiers
 
 parseType :: Parser Type
-parseType = finalize <$> go (ResolvingTS Nothing Nothing)
-  where go :: ResolvingTypeSpecifiers -> Parser ResolvingTypeSpecifiers
+parseType = finalize <$> start (ResolvingTS Nothing Nothing) <?> "type"
+  where start :: ResolvingTypeSpecifiers -> Parser ResolvingTypeSpecifiers
+        start rts = do
+            spec <- typeSpecifier
+            resolveTypeSpecifier rts spec >>= go
+
+        go :: ResolvingTypeSpecifiers -> Parser ResolvingTypeSpecifiers
         go rts = do
             mspecifier <- optionMaybe typeSpecifier
             case mspecifier of
@@ -115,7 +120,9 @@ instance Pretty TypeSpecifier where
     pretty TSUnsigned = "unsigned"
 
 instance Pretty ParseTypeError where
-    pretty _ = "type specifier error"
+    pretty (DuplicateSpecifier ts) = "Duplicate type specifier: " <> pretty ts
+    pretty (IncompatibleSpecifiers ts1 ts2) =
+        "Incompatible type specifiers: " <> pretty ts1 <> ", " <> pretty ts2
 
 typeError :: ParseTypeError -> Parser a
 typeError e = fail $ unpack $ pretty e
