@@ -200,9 +200,15 @@ data MemLoc = OffsetLoc !Int32
             | RegLoc !Reg
             | FRegLoc !FReg
             -- TODO:
-            -- this turns into .extern <name>_<unique> <sizeof(typeof(unique))> if true (global)
-            -- otherwise into  .lcomm <name>_<unique> <sizeof(typeof(unique))>
+            -- this turns into .extern <name>.<unique> <sizeof(typeof(unique))> if true (global)
+            -- otherwise into  .lcomm <name>.<unique> <sizeof(typeof(unique))>
+            -- using dots avoids name capture
             | GPLoc !Bool !Unique
+            -- TODO:
+            -- this turns into .data <name>.<unique>
+            -- followed by either, e.x. .word <initial value> if the initial value is known
+            -- or .space <size> if it isn't
+            | DataLoc !Unique
             deriving Eq
 
 data Function = Fn

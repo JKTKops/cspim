@@ -24,6 +24,7 @@ data Directive
      | DotText
      | DotData
      | DotGlobl  String
+     | DotSetAt Bool
      deriving (Eq, Ord, Show, Typeable, Data, Lift)
 
 data Reg
@@ -72,7 +73,7 @@ type Src2  = Either Reg Imm
 type FRDest = FReg
 type FRSrc  = FReg
 
-type Address = Either Label (Offset, Reg)
+type Address = Either (Label, Maybe Offset) (Offset, Reg)
 
 {-
 This instruction set, as well as the arrangement and type synonym names,

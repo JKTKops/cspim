@@ -19,6 +19,7 @@ import MIPS.Parser (mips)
 
 import Data.DList
 import Data.Function ((&))
+import Data.Functor (($>))
 import Data.WordUtils
 import Data.Maybe (fromMaybe)
 import Data.Text (pack)
@@ -41,16 +42,19 @@ instance Pretty CGError where
         "Unique " <> pretty (show u) <> " could not be found in symbol table: "
         <> mapName <> "."
 
-newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) () Compiler) a }
+newtype CodeGen a = CG { unCG :: (RWST SymbolTable (DList MipsLine) CodeGenState Compiler) a }
   deriving ( Functor, Applicative, Monad, MonadCompiler
-           , MonadReader SymbolTable, MonadWriter (DList MipsLine))
+           , MonadReader SymbolTable, MonadWriter (DList MipsLine), MonadState CodeGenState)
+
+newtype CodeGenState = CGS { returnLabel :: Maybe Tac.Label }
+initCodeGenState = CGS Nothing
 
 instance MonadFail CodeGen where
     fail = panic . pack
 
 unwrapCodeGen :: CodeGen a -> SymbolTable -> Compiler (a, [MipsLine])
 unwrapCodeGen (CG rwst) symtab =
-    runRWST rwst symtab () <&> \(a, _, w) -> (a, toList w)
+    runRWST rwst symtab initCodeGenState <&> \(a, _, w) -> (a, toList w)
 
 emit :: DList MipsLine -> CodeGen ()
 emit = tell
@@ -237,7 +241,7 @@ assignArrToVar varloc varty arrloc arrty arrix
                                   <@> Right (offset, RegFP)
                       emit $ singleton $ instToLine load
               Left uniq -> do
-                  reg <- loadNameWithDefault compilerTemp1 uniq
+                  reg <- integralLoadNameWithDefault uniq compilerTemp1
                   case sllAlignment arrty of
                       Nothing ->
                           emit [mips| li ${compilerTemp1}, !{fromIntegral $ sizeof arrty}
@@ -278,49 +282,48 @@ binopCodeGen lvalue b@(Binop lvar op rvar) = do
     rightSignage <- getSignage rvar
     rightSrc2 <- getRight rvar
     instruction <- selectBinopInst op leftSignage rightSignage
-    comm <- prettyInsn $ lvalue := b
-    (destReg, storeCode) <- chooseDestReg lvalue
+    destReg <- chooseDestReg lvalue
     emit $ instruction destReg leftRsrc rightSrc2
-    emit   storeCode
+    integralStoreLValue destReg lvalue
 binopCodeGen _ _ = panic $ "binopCodeGen: RValue isn't a binop!"
 
 getLeft :: RValue -> CodeGen Reg
-getLeft (RVar (Left lu)) = loadNameWithDefault compilerTemp1 lu
+getLeft (RVar (Left lu)) = integralLoadNameWithDefault lu compilerTemp1
 getLeft (RVar (Right (IntConst c))) = do
     emit [mips| li ${compilerTemp1}, !{fromIntegral c} |]
     return compilerTemp1
 getLeft (RVar (Right _)) = panic "getLeft: operand is non-integral constant"
 
 getRight :: RValue -> CodeGen (Either Reg Imm)
-getRight (RVar (Left ru)) = Left <$> loadNameWithDefault compilerTemp2 ru
+getRight (RVar (Left ru)) = Left <$> integralLoadNameWithDefault ru compilerTemp2
 getRight (RVar (Right (IntConst c))) = return $ Right $ fromIntegral c
 getRight (RVar (Right _)) = panic "getRight: right operand is non-integral constant"
 
 -- | Given an LValue, choose the best register to send a result to this lvalue
 --   and also return the code for storing from that register.
-chooseDestReg :: LValue -> CodeGen (Reg, DList MipsLine)
-chooseDestReg (LVar u) = ask >>= \r ->
-    CG $ lift $ do
-    (reg, _, code) <- runRWST (unCG $ storeNameWithDefault compilerTemp1 u) r ()
-    return (reg, code)
+chooseDestReg :: LValue -> CodeGen Reg
+chooseDestReg (LVar u) = do
+    askMemLoc u <&> \case
+        RegLoc r -> r
+        _        -> compilerTemp1
 
-loadNameWithDefault :: Reg -> Name -> CodeGen Reg
-loadNameWithDefault = handleNameWithDefaultReg integralLoadInst
+--loadNameWithDefault :: Reg -> Name -> CodeGen Reg
+--loadNameWithDefault = handleNameWithDefaultReg integralLoadInst
 
-storeNameWithDefault :: Reg -> Name -> CodeGen Reg
-storeNameWithDefault = handleNameWithDefaultReg integralStoreInst
+--storeNameWithDefault :: Reg -> Name -> CodeGen Reg
+--storeNameWithDefault = handleNameWithDefaultReg integralStoreInst
 
-handleNameWithDefaultReg :: (Type -> CodeGen (Reg -> Address -> MipsInstruction))
-                         -> Reg -> Name -> CodeGen Reg
-handleNameWithDefaultReg instFor def u = do
-    (loc, ty) <- askMemLocType u
-    case loc of
-        OffsetLoc off -> do
-            handler <- instFor ty
-            emit [instToLine $ handler def $ Right (off, RegFP)]
-            return def
-        RegLoc reg -> return reg
-        _ -> panic "binopCodeGen: floating point/global variables not implemented"
+--handleNameWithDefaultReg :: (Type -> CodeGen (Reg -> Address -> MipsInstruction))
+--                         -> Reg -> Name -> CodeGen Reg
+--handleNameWithDefaultReg instFor def u = do
+--    (loc, ty) <- askMemLocType u
+--    case loc of
+--        OffsetLoc off -> do
+--            handler <- instFor ty
+--            emit [instToLine $ handler def $ Right (off, RegFP)]
+--            return def
+--        RegLoc reg -> return reg
+--        _ -> panic "binopCodeGen: floating point/global variables not implemented"
 
 selectBinopInst :: Binop -> Signage -> Signage -- signages of the operands
                 -> CodeGen (RDest -> RSrc -> Src2 -> DList MipsLine)
@@ -375,22 +378,6 @@ getSignage (RVar (Right _)) = return Signed
 -- | Generates assembly for the (LIxArr n ix := RValue) case.
 assignToArr :: Name -> Var -> RValue -> CodeGen ()
 assignToArr uniq var rv = panic "assignment to arrays not implemented"
-
-integralLoadInst :: Type -> CodeGen (RDest -> Address -> MipsInstruction)
-integralLoadInst (IntTy _) = pure MLw
-integralLoadInst (ShortTy Signed)   = pure MLh
-integralLoadInst (ShortTy Unsigned) = pure MLhu
-integralLoadInst (CharTy Signed)    = pure MLb
-integralLoadInst (CharTy Unsigned)  = pure MLbu
-integralLoadInst ty = panic $ "TAC.CodeGen.integralLoadInst: Non-integral type! "
-                           <> "(" <> pretty ty <> ")"
-
-integralStoreInst :: Type -> CodeGen (RSrc -> Address -> MipsInstruction)
-integralStoreInst (IntTy _) = pure MSw
-integralStoreInst (ShortTy _) = pure MSh
-integralStoreInst (CharTy _) = pure MSb
-integralStoreInst ty = panic $ "TAC.CodeGen.integralStoreInst: Non-integral type! "
-                            <> "(" <> pretty ty <> ")"
 
 -- | Generates code for a 'retrieve v' instruction.
 retrieveCodeGen :: Name -> CodeGen ()
@@ -528,3 +515,210 @@ askMemLoc = askCodeGen "allocation table" askMemLocM
 
 askMemLocType :: Unique -> CodeGen (MemLoc, Type)
 askMemLocType uniq = (,) <$> askMemLoc uniq Prelude.<*> askVarType uniq
+
+labelForVar :: Unique -> CodeGen String
+labelForVar uniq = do
+    name <- askVarName uniq
+    return $ name ++ "." ++ show uniq
+
+--------------------------------------------------------------------------------------
+--
+-- Data movement instructions
+--
+--------------------------------------------------------------------------------------
+
+integralLoadInst :: Type -> CodeGen (RDest -> Address -> MipsInstruction)
+integralLoadInst (IntTy _) = pure MLw
+integralLoadInst (ShortTy Signed)   = pure MLh
+integralLoadInst (ShortTy Unsigned) = pure MLhu
+integralLoadInst (CharTy Signed)    = pure MLb
+integralLoadInst (CharTy Unsigned)  = pure MLbu
+integralLoadInst ty = panic $ "TAC.CodeGen.integralLoadInst: Non-integral type! "
+                           <> "(" <> pretty ty <> ")"
+
+integralStoreInst :: Type -> CodeGen (RSrc -> Address -> MipsInstruction)
+integralStoreInst (IntTy _) = pure MSw
+integralStoreInst (ShortTy _) = pure MSh
+integralStoreInst (CharTy _) = pure MSb
+integralStoreInst ty = panic $ "TAC.CodeGen.integralStoreInst: Non-integral type! "
+                            <> "(" <> pretty ty <> ")"
+
+-- | Load the value in a particular memory location and with a given type. Default to using
+--   the given register as the destination. Returns the register where the variable was
+--   actually stored.
+integralLoadMemLocTypeWithDefault :: MemLoc -> Type -> Reg -> CodeGen Reg
+integralLoadMemLocTypeWithDefault (OffsetLoc off) ty defReg = do
+    loadInst <- integralLoadInst ty
+    emit [instToLine $ loadInst defReg $ Right (off, RegFP)]
+    return defReg
+integralLoadMemLocTypeWithDefault (GPLoc _ uniq) ty defReg = do
+    loadInst <- integralLoadInst ty
+    lbl      <- labelForVar uniq
+    emit [instToLine $ loadInst defReg $ Left (lbl, Nothing)]
+    return defReg
+integralLoadMemLocTypeWithDefault (DataLoc uniq) ty defReg = do
+    loadInst <- integralLoadInst ty
+    lbl      <- labelForVar uniq
+    emit [instToLine $ loadInst defReg $ Left (lbl, Nothing)]
+    return defReg
+integralLoadMemLocTypeWithDefault (RegLoc reg) _ _ = return reg
+integralLoadMemLocTypeWithDefault (FRegLoc _) _ _ =
+    panic "TAC.CodeGen.integralLoadMemLocTypeWithDefault: FRegLoc!"
+
+-- | Load the value from a given memory location, with the given type, into the given register.
+integralLoadMemLocType :: MemLoc -> Type -> Reg -> CodeGen ()
+integralLoadMemLocType memloc ty dest = do
+    r <- integralLoadMemLocTypeWithDefault memloc ty dest
+    when (r /= dest) $ emit [mips| move ${dest}, ${r} |]
+
+-- | Load a variable into a register, using the given register as a default destination.
+--   Returns the register where the variable can be found.
+--   The result is only ever not the default if the variable's MemLoc is a register.
+integralLoadNameWithDefault :: Unique -> Reg -> CodeGen Reg
+integralLoadNameWithDefault u reg = do
+    (memloc, ty) <- askMemLocType u
+    integralLoadMemLocTypeWithDefault memloc ty reg
+
+-- | Load a variable into the given register. If the result just needs to be in /some/
+--   register, 'integralLoadNameWithDefault' can often omit moves here.
+integralLoadName :: Unique -> Reg -> CodeGen ()
+integralLoadName uniq reg = do
+    (memloc, ty) <- askMemLocType uniq
+    integralLoadMemLocType memloc ty reg
+
+-- | Load a pointer to a given memory location into a given register.
+--   Panics if the memory location is a register location.
+loadMemLocPtr :: MemLoc -> Reg -> CodeGen ()
+loadMemLocPtr (RegLoc _) _ =
+    panic "TAC.CodeGen.loadMemLocPtr: Can't load pointer to register"
+loadMemLocPtr (FRegLoc _) _ =
+    panic "TAC.CodeGen.loadMemLocPtr: Can't load pointer to f-register"
+loadMemLocPtr (OffsetLoc off) reg = emit [mips| addu ${reg}, $fp, !{off} |]
+loadMemLocPtr (GPLoc _ uniq)  reg = do
+    lbl <- labelForVar uniq
+    emit [mips| la ${reg}, @{lbl} |]
+loadMemLocPtr (DataLoc uniq) reg = do
+    lbl <- labelForVar uniq
+    emit [mips| la ${reg}, @{lbl} |]
+
+loadNamePtr :: Unique -> Reg -> CodeGen ()
+loadNamePtr u reg = do
+    memloc <- askMemLoc u
+    loadMemLocPtr memloc reg
+
+integralLoadFromArray :: Type -> Unique -> Var -> Reg -> CodeGen ()
+integralLoadFromArray elemTy uniq ixvar dest = case ixvar of
+    Right (IntConst i) -> askMemLoc uniq >>= loadConstantOffset (fromIntegral i)
+    Left ixu -> calculateOffset ixu >> askMemLoc uniq >>= calculateAddress >> loadIfNecessary
+
+  where
+    loadConstantOffset :: Offset -> MemLoc -> CodeGen ()
+    loadConstantOffset ix loc
+      | elemTyIsArrTy = case loc of
+            OffsetLoc off -> emit [mips| addu ${dest}, $fp, !{off + ix * elemSize} |]
+            GPLoc _ uniq  -> do
+                lbl <- labelForVar uniq
+                emit [mips| la ${dest}, @{lbl} + !{ix * elemSize} |]
+            DataLoc uniq -> do
+                lbl <- labelForVar uniq
+                emit [mips| la ${dest}, @{lbl} + !{ix * elemSize} |]
+      | otherwise = do
+            loadInst <- integralLoadInst elemTy
+            case loc of
+                OffsetLoc off -> do
+                    emit [instToLine $ loadInst dest $ Right (off + ix * elemSize, RegFP)]
+                GPLoc _ uniq -> do
+                    lbl <- labelForVar uniq
+                    emit [instToLine $ loadInst dest $ Left (lbl, Just (ix * elemSize))]
+                DataLoc uniq -> do
+                    lbl <- labelForVar uniq
+                    emit [instToLine $ loadInst dest $ Left (lbl, Just (ix * elemSize))]
+
+    calculateOffset :: Unique -> CodeGen ()
+    calculateOffset u = do
+        reg <- integralLoadNameWithDefault u dest
+        case elemAlignment of
+            Nothing ->
+                emit [mips| li ${dest}, !{elemSize}
+                            mult ${dest}, ${reg}
+                            mflo ${dest}
+                          |]
+            Just a -> emit [mips| sll ${dest}, ${reg}, !{fromIntegral a} |]
+
+    -- given that $dest already contains the offset, add the base address to it
+    calculateAddress :: MemLoc -> CodeGen ()
+    calculateAddress (OffsetLoc off) = emit [mips| addu ${dest}, ${dest}, $fp
+                                                   addu ${dest}, ${dest}, !{off} |]
+    calculateAddress (GPLoc _ uniq) = calculateAddress (DataLoc uniq)
+    calculateAddress (DataLoc uniq) = do
+        lbl <- labelForVar uniq
+        emit [mips| .set noat
+                    la $at, @{lbl}
+                    addu ${dest}, ${dest}, $at
+                    .set at
+                  |]
+
+    loadIfNecessary :: CodeGen ()
+    loadIfNecessary
+      | elemTyIsArrTy = pure ()
+      | otherwise = do
+            loadInst <- integralLoadInst elemTy
+            emit [instToLine $ loadInst dest $ Right (0, dest)]
+
+    elemSize :: Offset
+    elemSize = fromIntegral (sizeof elemTy)
+
+    elemAlignment :: Maybe Offset
+    elemAlignment = fromIntegral <$> sllAlignment elemTy
+
+    elemTyIsArrTy | ArrTy _ _ <- elemTy = True
+                  | otherwise           = False
+
+-- | Load an RValue into a register. If the RValue is itself stored in a register, then
+--   no code is emitted and that register is returned. Otherwise, the RValue is loaded into
+--   the given register, and the given register is returned.
+integralLoadRValueWithDefault :: RValue -> Reg -> CodeGen Reg
+integralLoadRValueWithDefault (RVar (Right (IntConst i))) def =
+    emit [mips| li ${def}, !{fromIntegral i} |] $> def
+integralLoadRValueWithDefault (RVar (Left u)) def = do
+    (memloc, ty) <- askMemLocType u
+    case ty of
+        ArrTy _ _ -> loadMemLocPtr memloc def $> def
+        _         -> integralLoadMemLocTypeWithDefault memloc ty def
+integralLoadRValueWithDefault (RIxArr uniq ixvar) def = do
+    ArrTy _ elemTy <- askVarType uniq
+    integralLoadFromArray elemTy uniq ixvar def $> def
+
+-- | Load an RValue into the given register. If you just need the value to be in /some/
+--   register, then 'integralLoadRValueWithDefault' can ocassionally omit move instructions.
+integralLoadRValue :: RValue -> Reg -> CodeGen ()
+integralLoadRValue rv dest = do
+    reg <- integralLoadRValueWithDefault rv dest
+    when (dest /= reg) $ emit [mips| move ${dest}, ${reg} |]
+
+-- | Store the value in the given reg, which has the given type, to the given memloc.
+integralStoreMemLocType :: Reg -> Type -> MemLoc -> CodeGen ()
+integralStoreMemLocType reg ty (OffsetLoc off) = do
+    storeInst <- integralStoreInst ty
+    emit [instToLine $ storeInst reg $ Right (off, RegFP)]
+integralStoreMemLocType reg ty (GPLoc _ uniq) = do
+    storeInst <- integralStoreInst ty
+    lbl       <- labelForVar uniq
+    emit [instToLine $ storeInst reg $ Left (lbl, Nothing)]
+integralStoreMemLocType reg ty (DataLoc uniq) = do
+    storeInst <- integralStoreInst ty
+    lbl       <- labelForVar uniq
+    emit [instToLine $ storeInst reg $ Left (lbl, Nothing)]
+integralStoreMemLocType reg _ (RegLoc destreg) =
+    when (reg /= destreg) $ emit [mips| move ${destreg}, ${reg} |]
+integralStoreMemLocType _ _ (FRegLoc _) =
+    panic "TAC.CodeGen.integralStoreMemLocTypeWithDefault: FRegLoc!"
+
+-- | Store the value in the given register to the given variable.
+integralStoreName :: Reg -> Unique -> CodeGen ()
+integralStoreName r u = do
+    (memloc, ty) <- askMemLocType u
+    integralStoreMemLocType r ty memloc
+
+integralStoreLValue :: Reg -> LValue -> CodeGen ()
+integralStoreLValue r (LVar u) = integralStoreName r u

@@ -101,12 +101,10 @@ blockItemList = foldr (<*|*>) emptyGraph <$> many blockItem
 statement :: Parser (Graph Insn O O)
 statement = expecting "statement" $
             labeledStatement
-        <|> (exprStmt <|> retStmt
-                      <|> gotoStmt
-                      <|> semi $> emptyGraph)
+        <|> ((exprStmt <|> retStmt <|> gotoStmt) <* semi)
+        <|> (semi $> emptyGraph)
         <|> block
--- TODO NEXT: make compiler a UniqueMonad, make parser leech off that,
--- re-combine Return and SetRV, have code generator generate a return label at the
+-- TODO NEXT: re-combine Return and SetRV, have code generator generate a return label at the
 -- end of each function and put the returning code there
 -- i.e. assign $v0; goto $L15; $L15: ... # start return sequence
 -- A mips optimizer in the future could do small-block catentation if desired.

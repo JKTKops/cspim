@@ -105,6 +105,7 @@ instance Pretty Directive where
     ppr DotText         = text ".text"
     ppr DotData         = text ".data"
     ppr (DotGlobl str)  = text ".globl" <+> ppr str
+    ppr (DotSetAt b)    = text ".set" <+> if b then text "at" else text "noat"
 
 makeRegPrettyInstances
 
@@ -123,8 +124,9 @@ instance Pretty Src2 where
     ppr (Right imm) = ppr imm
 
 instance Pretty Address where
-    ppr (Left label)       = ppr label
-    ppr (Right (imm, reg)) = ppr imm <> parens (ppr reg)
+    ppr (Left (label, Nothing))  = ppr label
+    ppr (Left (label, Just off)) = ppr label <> char '+' <> ppr off
+    ppr (Right (imm, reg))       = ppr imm <> parens (ppr reg)
 
 makeMIPrettyInstance
 

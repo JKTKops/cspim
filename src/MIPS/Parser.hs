@@ -71,8 +71,8 @@ type    ParsedFRSrc   = ParsedFReg
 newtype ParsedSrc2    = PS2 (Either ParsedReg ParsedImm)         deriving (Typeable, Data)
 newtype ParsedLabel   = PL (Either Label Exp)                    deriving (Typeable, Data)
 newtype ParsedAddress = PA (Either
-                             ParsedLabel
-                             (ParsedOffset, ParsedReg)) deriving (Typeable, Data)
+                             (ParsedLabel, Maybe ParsedOffset)
+                             (ParsedOffset, ParsedReg))          deriving (Typeable, Data)
 
 data ParsedCommentPiece
      = StringPiece String
@@ -196,7 +196,14 @@ parseDirective = foldl1 (<|>) $ map try
     , string ".text"   $> DotText
     , string ".data"   $> DotData
     , string ".globl"  $> DotGlobl ""
+    , setat
     ]
+  where setat :: Parser Directive
+        setat = do
+            string ".set"
+            skipMany1 space
+            on <- (string "at" $> True) <|> (string "noat" $> False)
+            return $ DotSetAt on
 
 parseFReg :: Parser ParsedFReg
 parseFReg = do
@@ -227,10 +234,22 @@ parseLabel = PL <$> (Left <$> do first <- letter
                 <|> (Right <$> spliceParser "@"))
 
 parseAddr :: Parser ParsedAddress
-parseAddr = PA <$> (Left <$> parseLabel
-               <|> Right <$> do offset <- parseOffset
-                                reg    <- parens parseReg
-                                return (offset, reg))
+parseAddr = PA <$> (labeledAddress
+               <|> offsetAddress)
+
+  where
+    labeledAddress = Left <$> do
+        label <- parseLabel
+        mOff <- optionMaybe $ do
+            try $ do skipMany space
+                     char '+'
+            skipMany space
+            parseOffset
+        return (label, mOff)
+
+    offsetAddress = Right <$> do offset <- parseOffset
+                                 reg    <- parens parseReg
+                                 return (offset, reg)
 
 spliceParser :: String -> Parser Exp
 spliceParser prefix = do

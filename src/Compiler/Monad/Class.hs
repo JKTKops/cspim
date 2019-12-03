@@ -9,6 +9,7 @@ module Compiler.Monad.Class
 
     -- * The Compiler monad and the MonadCompiler classes
     , Compiler(..), runCompiler, runCompilerIO, testCompilerIO
+
     , MonadCompiler(verboseLog, compilerWarnings, compilerErrors, compilerFlags)
     , FullMonadCompiler(..)
 
@@ -150,7 +151,7 @@ instance MonadCompiler Compiler where
 
 instance FullMonadCompiler Compiler where
     runMonadCompiler (C m) = C $ do
-        us0   <- lift $ lift getUniqueSupplyM
+        us0   <- lift $ lift unsafeGetUniqueSupplyM
         flags <- ask
         return $ runReaderT m flags & evalValidateT & evalUniqueSM us0
 

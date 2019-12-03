@@ -9,10 +9,13 @@ regular Haskell list.
 
 See: TAC.CodeGen, Compiler.Monad
 -}
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 module Data.DList where
 
 import qualified GHC.Exts as E (IsList(..))
+import Control.Lens.Cons
+import Control.Lens.Prism
 
 newtype DList a = DL { unDL :: [a] -> [a] }
 
@@ -20,6 +23,12 @@ instance E.IsList (DList a) where
     type Item (DList a) = a
     fromList l = DL $ \tail -> l ++ tail
     toList (DL f) = f []
+
+instance Cons (DList a) (DList b) a b where
+    _Cons = prism (\(x, xs) -> fromList (x : toList xs))
+                  (\xs -> case toList xs of
+                          y:ys -> Right (y, fromList ys)
+                          [] -> Left (fromList []))
 
 fromList :: [a] -> DList a
 fromList = E.fromList
