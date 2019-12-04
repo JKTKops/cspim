@@ -31,11 +31,10 @@ data Insn e x where
     Enter      :: Name                      -> Insn O O -- see note [Enter O/O]
     (:=)       :: LValue -> TacExp          -> Insn O O
     Retrieve   :: Name                      -> Insn O O -- move (loc name) $v0
-    SetRV      :: RValue                    -> Insn O O
     Goto       :: Label                     -> Insn O C
     IfGoto     :: RValue -> Label  -> Label -> Insn O C -- cond iflabel elselable
     Call       :: Name -> [RValue] -> Label -> Insn O C -- func args return_label
-    Return     :: Name                      -> Insn O C -- func (expr or void)
+    Return     :: Maybe RValue              -> Insn O C -- func (expr or void)
 
 instance Show (Insn e x) where
     show (Label lbl) = show lbl ++ ":"
@@ -45,7 +44,8 @@ instance Show (Insn e x) where
     show (Goto lbl)   = "goto " ++ show lbl
     show (IfGoto rv tl fl) = "ifgoto (" ++ show rv ++") " ++ show tl ++ " " ++ show fl
     show (Call f args _) = unwords ["call", show f, show args]
-    show (Return _) = "return"
+    show (Return (Just rv)) = "return " ++ show rv
+    show (Return Nothing)   = "return"
 
 {- NOTE [Enter O/O]
 The enter f instruction is used to generate the prologue for function f.

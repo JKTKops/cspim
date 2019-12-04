@@ -79,8 +79,7 @@ mainFunction = do
                 <*|*> mkMiddle (Enter main_uniq)
                 <*|*> body
                 -- main always returns 0 if it reaches the end
-                <*|*> mkMiddle (SetRV (RVar (Right $ IntConst 0)))
-                <*|*> mkLast (Return main_uniq)
+                <*|*> mkLast (Return $ Just $ RVar $ Right $ IntConst 0)
         fn = Fn { _name = main_uniq, _args = []
                 , _locals = main_lcls, _stackFrame = stackFrame
                 , _body = TacGraph graph entLbl
@@ -128,22 +127,17 @@ exprStmt = do
 
 -- | Parse a return statement.
 --
---   Every distinct return statement creates its own return instruction. Optimizations
---   are expected to eliminate the duplication if the return instructions are expected
---   to turn into many MIPS instructions.
+--   Return instructions implicitly jump to a return label which is created by the code
+--   generator. If the MIPS optimizer decides it is worthwhile to duplicate that code,
+--   then small block catenation will duplicate it later. We don't concern ourselves with that
+--   here.
 retStmt :: Parser (Graph Insn O O)
 retStmt = do
     reserved "return"
     mrv <- optionMaybe parseRValue
-    let setRv = case mrv of
-            Nothing -> emptyGraph
-            Just rv -> mkMiddle $ SetRV rv
-    mfname <- use funName
-    fname <- case mfname of
-        Nothing -> P $ P.unexpected "return"
-        Just n  -> pure n
+    let retInst = mkLast $ Return mrv
     postLbl <- freshLabel
-    return $ (setRv <*|*> mkLast (Return fname)) |*><*| mkLabel postLbl
+    return $ retInst |*><*| mkLabel postLbl
 
 -- | Parse a simple declaration, possibly with an initializer.
 --   TODO: switch to type specifier/declaration specifier model;

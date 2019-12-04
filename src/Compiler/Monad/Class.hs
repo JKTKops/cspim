@@ -8,7 +8,7 @@ module Compiler.Monad.Class
       These(..)
 
     -- * The Compiler monad and the MonadCompiler classes
-    , Compiler(..), runCompiler, runCompilerIO, testCompilerIO
+    , Compiler(..), runCompiler, runCompilerIO, testCompilerIO, testCompilerIOWithGenSym
 
     , MonadCompiler(verboseLog, compilerWarnings, compilerErrors, compilerFlags)
     , FullMonadCompiler(..)
@@ -131,8 +131,11 @@ runCompilerIO c flags = do
 -- | Use this in functions that need to test run compilers.
 --   It resets the gensym to counter 0 and inc 1, then calls runCompilerIO.
 testCompilerIO :: Compiler a -> Flags -> IO (These [CErr] a)
-testCompilerIO c flags = do
-    initGenSym 0 1
+testCompilerIO = testCompilerIOWithGenSym 0 1
+
+testCompilerIOWithGenSym :: Int -> Int -> Compiler a -> Flags -> IO (These [CErr] a)
+testCompilerIOWithGenSym init step c flags = do
+    initGenSym init step
     runCompilerIO c flags
 
 

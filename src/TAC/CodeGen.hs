@@ -29,6 +29,8 @@ import Control.Monad.RWS.Strict
 import Control.Monad.Fail
 import Control.Lens
 
+import Control.Monad.Debug
+
 mipsCodeGenProc :: Program -> Compiler [MipsLine]
 mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
     let action = do -- written this way to make it easier to add constants and globalVars later
@@ -97,11 +99,10 @@ insnCodeGen (Label l) = labelCodeGen l
 insnCodeGen (Enter f) = enterCodeGen f
 insnCodeGen (lvalue := rvalue) = assignCodeGen lvalue rvalue
 insnCodeGen (Retrieve var) = retrieveCodeGen var
-insnCodeGen (SetRV rvalue) = setRVCodeGen rvalue
 insnCodeGen (Goto l) = gotoCodeGen l
 insnCodeGen (IfGoto rvalue t f) = ifgotoCodeGen rvalue t f
 insnCodeGen (Call f args ret_label) = callCodeGen f args -- drop ret_label as only Hoopl cares
-insnCodeGen (Return f) = returnCodeGen f
+insnCodeGen (Return mrv) = returnCodeGen mrv
 
 labelCodeGen :: Tac.Label -> CodeGen ()
 labelCodeGen lbl = do
@@ -404,30 +405,26 @@ callCodeGen f_uniq args = panic "call not implemented"
 -- | Generate code for return statements. This includes setting $v0 and the jr $ra instruction.
 --   Destroys the function's frame restoring the frame pointer,
 --   but does /not/ clean the stack arguments. This is the responsibility of the caller.
-setRVCodeGen :: RValue -> CodeGen ()
-setRVCodeGen (RVar (Left uniq)) = do
-    (memloc, ty) <- askMemLocType uniq
-    assignVarToVar (RegLoc RegV0) ty memloc ty
-setRVCodeGen (RVar (Right const))
-  | IntConst i <- const = assignConstToVar (RegLoc RegV0) (IntTy signage) const
-  | otherwise = panic "returning non-integral constants not implemented"
-  where signage = if intValueOfConst const < 0 then Signed else Unsigned
-setRVCodeGen (RIxArr uniq ixvar) = do
-    (memloc, ArrTy _ ty) <- askMemLocType uniq
-    assignArrToVar (RegLoc RegV0) ty memloc ty ixvar
+returnCodeGen :: Maybe RValue -> CodeGen ()
+returnCodeGen (Just rv) = do
+    integralLoadRValue rv RegV0
+    jumpToReturnLabel
+returnCodeGen Nothing = jumpToReturnLabel;
 
 -- | Generate code for returning from a function. Reloads saved registers,
---   and cleans up the stack frame. Does /not/ set $v0; SetRV instructions set the return value.
-returnCodeGen :: Name -> CodeGen ()
-returnCodeGen uniq = do
+--   and cleans up the stack frame. Does /not/ set $v0; Return instructions set $v0 and
+--   then jump here.
+leaveFunCodeGen :: Name -> CodeGen ()
+leaveFunCodeGen uniq = do
     func <- askFuncTable uniq
     let sf_size = func ^. stackFrame.size
         saved_regs = func ^. stackFrame.savedRegisters
-    emit [mips| move $sp, $fp # Start return sequence |]
+    returnLabel <- useReturnLabel
+    emit [mips| @{returnLabel}: # Start return sequence |]
+    emit [mips| move $sp, $fp |]
     loadRegs saved_regs
     emit [mips| addu $sp, $sp, !{sf_size}
-                jr $ra
-              |]
+                jr $ra |]
 
   where loadRegs :: M.Map Reg MemLoc -> CodeGen ()
         loadRegs map =
@@ -455,7 +452,10 @@ codeGenFunction f = do
     emit [ ML (Just (MDirective $ DotText))          Nothing
          , ML (Just (MDirective $ DotGlobl funName)) Nothing
          ]
+    freshReturnLabel
     mapM_ codeGenBlockInsns blockInsns
+    leaveFunCodeGen $ f ^. name
+    clearReturnLabel
 
 codeGenBlockInsns :: BlockInsns -> CodeGen ()
 codeGenBlockInsns (e, ms, x) = insnCodeGen e >> mapM_ insnCodeGen ms >> insnCodeGen x
@@ -520,6 +520,24 @@ labelForVar :: Unique -> CodeGen String
 labelForVar uniq = do
     name <- askVarName uniq
     return $ name ++ "." ++ show uniq
+
+jumpToReturnLabel :: CodeGen ()
+jumpToReturnLabel = do
+    lbl <- useReturnLabel
+    emit [mips| j @{lbl} |]
+
+useReturnLabel :: CodeGen String
+useReturnLabel = do
+    Just lbl <- gets returnLabel
+    askLabelName lbl
+
+freshReturnLabel :: CodeGen ()
+freshReturnLabel = do
+    lbl <- freshLabel
+    modify $ \s -> s { returnLabel = Just lbl }
+
+clearReturnLabel :: CodeGen ()
+clearReturnLabel = modify $ \s -> s { returnLabel = Nothing }
 
 --------------------------------------------------------------------------------------
 --
@@ -641,8 +659,7 @@ integralLoadFromArray elemTy uniq ixvar dest = case ixvar of
             Nothing ->
                 emit [mips| li ${dest}, !{elemSize}
                             mult ${dest}, ${reg}
-                            mflo ${dest}
-                          |]
+                            mflo ${dest} |]
             Just a -> emit [mips| sll ${dest}, ${reg}, !{fromIntegral a} |]
 
     -- given that $dest already contains the offset, add the base address to it
@@ -655,8 +672,7 @@ integralLoadFromArray elemTy uniq ixvar dest = case ixvar of
         emit [mips| .set noat
                     la $at, @{lbl}
                     addu ${dest}, ${dest}, $at
-                    .set at
-                  |]
+                    .set at |]
 
     loadIfNecessary :: CodeGen ()
     loadIfNecessary
@@ -720,5 +736,11 @@ integralStoreName r u = do
     (memloc, ty) <- askMemLocType u
     integralStoreMemLocType r ty memloc
 
+integralStoreToArray :: Type -> Reg -> Unique -> Var -> CodeGen ()
+integralStoreToArray elemTy reg uniq = undefined
+
 integralStoreLValue :: Reg -> LValue -> CodeGen ()
 integralStoreLValue r (LVar u) = integralStoreName r u
+integralStoreLValue r (LIxArr u ixvar) = do
+    ArrTy _ elemTy <- askVarType u
+    integralStoreToArray elemTy r u ixvar
