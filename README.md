@@ -19,16 +19,14 @@ Planned features:
 
 - [x] Variables
 - [x] int type
-- [ ] Integral (signed/unsigned int/short/char) types, but not long
+- [x] Integral (signed/unsigned int/short/char) types, but not long
 - [x] return statements
 - [ ] if, else, for, while, do-while control flow
-- [ ] goto
-- [ ] basic C expressions with operators
+- [x] goto
+- [ ] basic C expressions with operators (in significant progress)
 - [ ] arrays
 - [ ] typedefs
 - [ ] structs
- 
-These features are planned for completion in time for SpimBot.
 
 These additional features are planned longer-term goals:
 
