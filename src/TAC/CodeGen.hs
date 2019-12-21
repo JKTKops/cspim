@@ -29,6 +29,8 @@ import Control.Monad.RWS.Strict
 import Control.Monad.Fail
 import Control.Lens
 
+-- TODO: censor the output of the codegen monad to add .set at and .set noat
+-- or perhaps do the above as a final phase after the peephole optimizer
 mipsCodeGenProc :: Program -> Compiler [MipsLine]
 mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
     let action = do -- written this way to make it easier to add constants and globalVars later
@@ -276,7 +278,12 @@ gotoCodeGen lbl = do
     tell [mips| j @{lbl_name} |]
 
 ifgotoCodeGen :: RValue -> Label -> Label -> CodeGen ()
-ifgotoCodeGen rvalue lbl_t lbl_f = panic "ifgoto not implemented"
+ifgotoCodeGen rvalue lbl_t lbl_f = do
+    reg <- integralLoadRValueWithDefault rvalue compilerTemp1
+    [lbl_t_name, lbl_f_name] <- mapM askLabelName ([lbl_t, lbl_f] :: [Label])
+    -- The mips peephole optimizer will abuse the true-fallthrough to eliminate the branch
+    emit [mips| bnez ${reg}, @{lbl_t_name}
+                b            @{lbl_f_name} |]
 
 {- case rvalue of
     RVar (Left uniq)   -> branchVar uniq lbl_t lbl_f
@@ -583,6 +590,8 @@ integralStoreToArray elemTy reg uniq off = do
     inst <- integralStoreInst elemTy
     emit $ instToLines $ inst reg $ mkAddr $ Just off
 
+-- | Get a function which can take an indexing offset to produce the address of
+--   and element of an array, for use in load/store instructions.
 getArrayAddr :: Unique -> CodeGen (Maybe Offset -> Address)
 getArrayAddr u = do
     memloc <- askMemLoc u
@@ -593,7 +602,6 @@ getArrayAddr u = do
         DataLoc _     -> return $ \arr_off -> Left (lbl, arr_off)
         _ -> panic "TAC.CodeGen.getArrayAddr: (F)RegLoc"
 
--- TODO: censor the output of the codegen monad to add .set at and .set noat
 -- | Store the value in a given register to the given LValue.
 --   May make use of $at if the LValue is an LDeref.
 integralStoreLValue :: Reg -> LValue -> CodeGen ()
@@ -603,4 +611,3 @@ integralStoreLValue r (LDeref u off) = do
     case ty of
         ArrTy _ elemTy -> integralStoreToArray elemTy r u off
         -- TODO: Add PtrTy
-

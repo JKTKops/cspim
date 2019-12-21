@@ -63,13 +63,22 @@ infixr 8 :=
 
 data LValue
      = LVar Name
-     | LDeref Name Offset
+     | LDeref Name Offset --  *(x + o)
      | LIxArr Name Var -- x[i]
 
 data RValue
      = RVar Var
      | RDeref Name Offset --  *(x + o)
      | RIxArr Name Var -- x[i]
+
+{- NOTE [LValues and RValues]
+TAC coming out of the parser can (and typically will) contain LIxArr and RIxArr
+values to represent array accesses. However, at some point (perhaps after one round
+of constant propogation), these must be converted to RDerefs. They are no longer
+allowed inside the TAC after this point.
+
+This allows better warnings for compile-time bounds checking.
+-}
 
 data TacExp
      = ValExp RValue
