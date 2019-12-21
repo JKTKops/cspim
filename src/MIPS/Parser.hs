@@ -17,7 +17,7 @@ import MIPS.ParserTH
 
 import Data.List (foldl', intercalate)
 import Data.Either (lefts, rights)
-import Data.Functor (($>))
+import Data.Functor ((<&>), ($>))
 import Data.Word
 import Data.Int
 
@@ -186,9 +186,9 @@ regByNameNumber = do
 --   Write them by hand when they need to be emitted.
 parseDirective :: Parser Directive
 parseDirective = foldl1 (<|>) $ map try
-    [ string ".byte"   $> DotByte []
-    , string ".half"   $> DotHalf []
-    , string ".word"   $> DotWord []
+    [ string ".byte"   >> integer <&> (\i -> DotByte [i])
+    , string ".half"   >> integer <&> (\i -> DotHalf [i])
+    , string ".word"   >> integer <&> (\i -> DotWord [i])
     , string ".float"  $> DotFloat []
     , string ".double" $> DotDouble []
     , string ".ascii"  $> DotAscii ""
@@ -228,8 +228,8 @@ parseSrc2 :: Parser ParsedSrc2
 parseSrc2 = PS2 <$> (Left <$> parseReg <|> Right <$> parseImm)
 
 parseLabel :: Parser ParsedLabel
-parseLabel = PL <$> (Left <$> do first <- letter
-                                 rest  <- many1 $ alphaNum <|> char '_'
+parseLabel = PL <$> (Left <$> do first <- letter <|> char '$'
+                                 rest  <- many1 $ alphaNum <|> char '_' <|> char '.'
                                  return $ first : rest
                 <|> (Right <$> spliceParser "@"))
 

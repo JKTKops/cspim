@@ -12,6 +12,7 @@ so we do it with 'unsafePerformIO'. Similarly, we execute cpp over the input fil
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 module Compiler.Pipeline where
 import Compiler.Pipeline.Internal
 

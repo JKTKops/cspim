@@ -6,7 +6,7 @@ module TAC.Language
     ) where
 
 import Compiler.Hoopl
-import MIPS.Language (Reg, FReg)
+import MIPS.Language (Reg, FReg, Offset)
 import Control.Lens.TH
 
 import Data.Int
@@ -63,10 +63,12 @@ infixr 8 :=
 
 data LValue
      = LVar Name
+     | LDeref Name Offset
      | LIxArr Name Var -- x[i]
 
 data RValue
      = RVar Var
+     | RDeref Name Offset --  *(x + o)
      | RIxArr Name Var -- x[i]
 
 data TacExp

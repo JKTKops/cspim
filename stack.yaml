@@ -39,6 +39,7 @@ extra-deps:
 - git: https://github.com/haskell/hoopl.git
   commit: 89dde6af5b2fadfad726412c00a1ab01d34fd2a0
 - monad-validate-1.2.0.0@sha256:9850f408431098b28806dd464b6825a88a0b56c84f380d7fe0454c1df9d6f881,3505
+
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git
 #   commit: e7b331f14bcffb8367cd58fbfc8b40ec7642100a

@@ -1,3 +1,6 @@
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE QuasiQuotes #-}
 module Compiler.Pipeline.Internal where
 
 import System.IO.Unsafe

@@ -42,6 +42,7 @@ library:
   - monad-validate
   - parsec
   - pretty
+  - process
   - template-haskell
   - text
   - haskell-src-meta

@@ -29,8 +29,6 @@ import Control.Monad.RWS.Strict
 import Control.Monad.Fail
 import Control.Lens
 
-import Control.Monad.Debug
-
 mipsCodeGenProc :: Program -> Compiler [MipsLine]
 mipsCodeGenProc Prog{_functions = fns, _symbolTable = symtab} =
     let action = do -- written this way to make it easier to add constants and globalVars later
@@ -143,7 +141,9 @@ enterCodeGen uniq = do
     storeArg :: Name -> MemLoc -> CodeGen ()
     storeArg var desired_loc = do
         (loc, ty) <- askMemLocType var
-        assignVarToVar loc ty desired_loc ty
+        when (desired_loc /= loc) $ do
+            reg <- integralLoadMemLocTypeWithDefault desired_loc ty compilerTemp1
+            integralStoreMemLocType reg ty loc
 
 {- NOTE: [Prologue/return sensitivity]
 
@@ -167,102 +167,10 @@ restored before.
 assignCodeGen :: LValue -> TacExp -> CodeGen ()
 assignCodeGen lvalue exp =
     case exp of
-        (ValExp (RVar (Left runiq))) -> do
-            (rMemLoc, rType) <- askMemLocType runiq
-            case lvalue of
-                LVar luniq -> do
-                    (lMemLoc, lType) <- askMemLocType luniq
-                    assignVarToVar lMemLoc lType rMemLoc rType
-        (ValExp (RVar (Right const))) ->
-            case lvalue of
-                LVar luniq -> do
-                    (lMemLoc, lType) <- askMemLocType luniq
-                    assignConstToVar lMemLoc lType const
-        (ValExp (RIxArr runiq ixvar)) -> do
-            (rMemLoc, ArrTy _ arrTy) <- askMemLocType runiq
-            case lvalue of
-                LVar luniq -> do
-                    (lMemLoc, lType) <- askMemLocType luniq
-                    assignArrToVar lMemLoc lType rMemLoc arrTy ixvar
-
+        (ValExp rvalue) -> do
+            dest <- integralLoadRValueWithDefault rvalue compilerTemp1
+            integralStoreLValue dest lvalue
         b@(Binop _ _ _) -> binopCodeGen lvalue b
-
-assignVarToVar :: MemLoc -> Type -> MemLoc -> Type -> CodeGen ()
-assignVarToVar lloc ltype rloc rtype
-    | isIntegralTy ltype && isIntegralTy rtype = case (lloc, rloc) of
-          (OffsetLoc loff, OffsetLoc roff) -> do
-              -- l{w,h,hu,b,bu} $compilerTemp1, roff($fp)
-              -- s{w,h,b} $compilerTemp1, loff($fp)
-              retrieveInst <- integralLoadInst rtype <@> compilerTemp1 <@> Right (roff, RegFP)
-              storeInst   <- integralStoreInst ltype <@> compilerTemp1 <@> Right (loff, RegFP)
-              emit $ fromList [instToLine retrieveInst, instToLine storeInst]
-          (RegLoc reg, OffsetLoc off) -> do
-              -- l{w,h,hu,b,bu} $reg, off($fp)
-              inst <- integralLoadInst rtype <@> reg <@> Right (off, RegFP)
-              emit $ singleton $ instToLine inst
-          (OffsetLoc off, RegLoc reg) -> do
-              -- s{w,h,b} $reg, off($fp)
-              inst <- integralStoreInst ltype <@> reg <@> Right (off, RegFP)
-              emit $ singleton $ instToLine inst
-          (RegLoc lr, RegLoc rr) -> emit [mips| move ${lr}, ${rr} |]
-          _ -> panic "Int types being assigned to/from F registers!"
-
-assignConstToVar :: MemLoc -> Type -> Constant -> CodeGen ()
-assignConstToVar vloc vtype const
-    | isIntegralTy vtype = case vloc of
-          (OffsetLoc off) ->
-              (if intValueOfConst const == 0
-                  -- s{w,h,b} $0, off($fp)
-              then integralStoreInst vtype <@> Reg0 <@> Right (off, RegFP) >>=
-                       emit . singleton . instToLine
-              else do
-                      -- add $compilerTemp1, $0, !{intValueOfConst const}
-                      -- s{w,h,b} $compilerTemp1, off($fp)
-                      emit [mips| add ${compilerTemp1}, $0, !{intValueOfConst const} |]
-                      store <- integralStoreInst vtype <@> compilerTemp1 <@> Right (off, RegFP)
-                      emit $ singleton $ instToLine store)
-          (RegLoc reg) -> emit [mips| add ${reg}, $0, !{intValueOfConst const} |]
-
--- | Assign the result of accessing an array to variable.
---   Accepts the destination's memloc and type, the memloc of the array,
---   the type of the array /elements/, and the var which is indexing the array.
---
---   An unfortunately extremely complicated function.
-assignArrToVar :: MemLoc -> Type -> MemLoc -> Type -> Var -> CodeGen ()
-assignArrToVar varloc varty arrloc arrty arrix
-    | isIntegralTy varty && isIntegralTy arrty = case arrloc of
-          (OffsetLoc off) -> (case arrix of
-              Right (IntConst i) -> do
-                  let offset = off + (fromIntegral i) * (fromIntegral $ sizeof arrty)
-                  if arrtyIsArrayType
-                    then emit [mips| addu ${compilerTemp1}, $fp, !{offset} |]
-                    else do
-                      load <- integralLoadInst arrty
-                                  <@> compilerTemp1
-                                  <@> Right (offset, RegFP)
-                      emit $ singleton $ instToLine load
-              Left uniq -> do
-                  reg <- integralLoadNameWithDefault uniq compilerTemp1
-                  case sllAlignment arrty of
-                      Nothing ->
-                          emit [mips| li ${compilerTemp1}, !{fromIntegral $ sizeof arrty}
-                                      mult ${compilerTemp1}, ${reg}
-                                      mflo ${compilerTemp1}
-                                    |]
-                      Just a -> emit [mips| sll ${compilerTemp1}, ${reg}, !{fromIntegral a} |]
-                  emit [mips| addu ${compilerTemp1}, ${compilerTemp1}, $fp |]
-                  when (off /= 0) $ emit [mips| addu ${compilerTemp1}, ${compilerTemp1}, !{off} |]
-                  if arrtyIsArrayType
-                    then pure ()
-                    else do
-                      load <- integralLoadInst arrty <@> compilerTemp1
-                                                     <@> Right (0, compilerTemp1)
-                      emit $ singleton $ instToLine load)
-             >> assignVarToVar varloc varty (RegLoc compilerTemp1) arrty
-
-  where arrtyIsArrayType | ArrTy _ _ <- arrty = True
-                         | otherwise          = False
-
 
 {- NOTE: [Mul instructions]
 
@@ -307,24 +215,6 @@ chooseDestReg (LVar u) = do
     askMemLoc u <&> \case
         RegLoc r -> r
         _        -> compilerTemp1
-
---loadNameWithDefault :: Reg -> Name -> CodeGen Reg
---loadNameWithDefault = handleNameWithDefaultReg integralLoadInst
-
---storeNameWithDefault :: Reg -> Name -> CodeGen Reg
---storeNameWithDefault = handleNameWithDefaultReg integralStoreInst
-
---handleNameWithDefaultReg :: (Type -> CodeGen (Reg -> Address -> MipsInstruction))
---                         -> Reg -> Name -> CodeGen Reg
---handleNameWithDefaultReg instFor def u = do
---    (loc, ty) <- askMemLocType u
---    case loc of
---        OffsetLoc off -> do
---            handler <- instFor ty
---            emit [instToLine $ handler def $ Right (off, RegFP)]
---            return def
---        RegLoc reg -> return reg
---        _ -> panic "binopCodeGen: floating point/global variables not implemented"
 
 selectBinopInst :: Binop -> Signage -> Signage -- signages of the operands
                 -> CodeGen (RDest -> RSrc -> Src2 -> DList MipsLine)
@@ -376,13 +266,9 @@ getSignage (RVar (Left u)) = signageOf <$> askVarType u
 getSignage (RVar (Right _)) = return Signed
 
 
--- | Generates assembly for the (LIxArr n ix := RValue) case.
-assignToArr :: Name -> Var -> RValue -> CodeGen ()
-assignToArr uniq var rv = panic "assignment to arrays not implemented"
-
 -- | Generates code for a 'retrieve v' instruction.
 retrieveCodeGen :: Name -> CodeGen ()
-retrieveCodeGen uniq = panic "retreive not implemented"
+retrieveCodeGen uniq = integralStoreName RegV0 uniq
 
 gotoCodeGen :: Label -> CodeGen ()
 gotoCodeGen lbl = do
@@ -409,7 +295,7 @@ returnCodeGen :: Maybe RValue -> CodeGen ()
 returnCodeGen (Just rv) = do
     integralLoadRValue rv RegV0
     jumpToReturnLabel
-returnCodeGen Nothing = jumpToReturnLabel;
+returnCodeGen Nothing = jumpToReturnLabel
 
 -- | Generate code for returning from a function. Reloads saved registers,
 --   and cleans up the stack frame. Does /not/ set $v0; Return instructions set $v0 and
@@ -624,71 +510,21 @@ loadNamePtr u reg = do
     memloc <- askMemLoc u
     loadMemLocPtr memloc reg
 
-integralLoadFromArray :: Type -> Unique -> Var -> Reg -> CodeGen ()
-integralLoadFromArray elemTy uniq ixvar dest = case ixvar of
-    Right (IntConst i) -> askMemLoc uniq >>= loadConstantOffset (fromIntegral i)
-    Left ixu -> calculateOffset ixu >> askMemLoc uniq >>= calculateAddress >> loadIfNecessary
+integralLoadFromArray :: MemLoc -> Type -> Offset -> Reg -> CodeGen Reg
+integralLoadFromArray (OffsetLoc base_off) ty arr_off dest =
+    integralLoadMemLocTypeWithDefault (OffsetLoc $ base_off + arr_off) ty dest
+integralLoadFromArray (GPLoc _ u) ty arr_off dest = do
+    lbl <- labelForVar u
+    inst <- integralLoadInst ty
+    emit $ instToLines $ inst dest $ Left (lbl, Just arr_off)
+    return dest
+integralLoadFromArray (DataLoc u) ty arr_off dest = do
+    lbl <- labelForVar u
+    inst <- integralLoadInst ty
+    emit $ instToLines $ inst dest $ Left (lbl, Just arr_off)
+    return dest
+integralLoadFromArray _ _ _ _ = panic "TAC.CodeGen.integralLoadFromArray: RegLoc"
 
-  where
-    loadConstantOffset :: Offset -> MemLoc -> CodeGen ()
-    loadConstantOffset ix loc
-      | elemTyIsArrTy = case loc of
-            OffsetLoc off -> emit [mips| addu ${dest}, $fp, !{off + ix * elemSize} |]
-            GPLoc _ uniq  -> do
-                lbl <- labelForVar uniq
-                emit [mips| la ${dest}, @{lbl} + !{ix * elemSize} |]
-            DataLoc uniq -> do
-                lbl <- labelForVar uniq
-                emit [mips| la ${dest}, @{lbl} + !{ix * elemSize} |]
-      | otherwise = do
-            loadInst <- integralLoadInst elemTy
-            case loc of
-                OffsetLoc off -> do
-                    emit [instToLine $ loadInst dest $ Right (off + ix * elemSize, RegFP)]
-                GPLoc _ uniq -> do
-                    lbl <- labelForVar uniq
-                    emit [instToLine $ loadInst dest $ Left (lbl, Just (ix * elemSize))]
-                DataLoc uniq -> do
-                    lbl <- labelForVar uniq
-                    emit [instToLine $ loadInst dest $ Left (lbl, Just (ix * elemSize))]
-
-    calculateOffset :: Unique -> CodeGen ()
-    calculateOffset u = do
-        reg <- integralLoadNameWithDefault u dest
-        case elemAlignment of
-            Nothing ->
-                emit [mips| li ${dest}, !{elemSize}
-                            mult ${dest}, ${reg}
-                            mflo ${dest} |]
-            Just a -> emit [mips| sll ${dest}, ${reg}, !{fromIntegral a} |]
-
-    -- given that $dest already contains the offset, add the base address to it
-    calculateAddress :: MemLoc -> CodeGen ()
-    calculateAddress (OffsetLoc off) = emit [mips| addu ${dest}, ${dest}, $fp
-                                                   addu ${dest}, ${dest}, !{off} |]
-    calculateAddress (GPLoc _ uniq) = calculateAddress (DataLoc uniq)
-    calculateAddress (DataLoc uniq) = do
-        lbl <- labelForVar uniq
-        emit [mips| .set noat
-                    la $at, @{lbl}
-                    addu ${dest}, ${dest}, $at
-                    .set at |]
-
-    loadIfNecessary :: CodeGen ()
-    loadIfNecessary
-      | elemTyIsArrTy = pure ()
-      | otherwise = do
-            loadInst <- integralLoadInst elemTy
-            emit [instToLine $ loadInst dest $ Right (0, dest)]
-
-    elemSize :: Offset
-    elemSize = fromIntegral (sizeof elemTy)
-
-    elemAlignment :: Maybe Offset
-    elemAlignment = fromIntegral <$> sllAlignment elemTy
-
-    elemTyIsArrTy | ArrTy _ _ <- elemTy = True
-                  | otherwise           = False
 
 -- | Load an RValue into a register. If the RValue is itself stored in a register, then
 --   no code is emitted and that register is returned. Otherwise, the RValue is loaded into
@@ -701,9 +537,14 @@ integralLoadRValueWithDefault (RVar (Left u)) def = do
     case ty of
         ArrTy _ _ -> loadMemLocPtr memloc def $> def
         _         -> integralLoadMemLocTypeWithDefault memloc ty def
-integralLoadRValueWithDefault (RIxArr uniq ixvar) def = do
-    ArrTy _ elemTy <- askVarType uniq
-    integralLoadFromArray elemTy uniq ixvar def $> def
+integralLoadRValueWithDefault (RDeref uniq off) def = do
+    (memloc, ty) <- askMemLocType uniq
+    case ty of
+        ArrTy _ elemTy -> integralLoadFromArray memloc elemTy off def
+        _         -> do
+            dest <- integralLoadMemLocTypeWithDefault memloc ty def
+            emit [mips| lw ${dest}, !{off}(${dest}) |]
+            return dest
 
 -- | Load an RValue into the given register. If you just need the value to be in /some/
 --   register, then 'integralLoadRValueWithDefault' can ocassionally omit move instructions.
@@ -736,11 +577,30 @@ integralStoreName r u = do
     (memloc, ty) <- askMemLocType u
     integralStoreMemLocType r ty memloc
 
-integralStoreToArray :: Type -> Reg -> Unique -> Var -> CodeGen ()
-integralStoreToArray elemTy reg uniq = undefined
+integralStoreToArray :: Type -> Reg -> Unique -> Offset -> CodeGen ()
+integralStoreToArray elemTy reg uniq off = do
+    mkAddr <- getArrayAddr uniq
+    inst <- integralStoreInst elemTy
+    emit $ instToLines $ inst reg $ mkAddr $ Just off
 
+getArrayAddr :: Unique -> CodeGen (Maybe Offset -> Address)
+getArrayAddr u = do
+    memloc <- askMemLoc u
+    lbl <- labelForVar u
+    case memloc of
+        OffsetLoc off -> return $ \arr_off -> Right (off + fromMaybe 0 arr_off, RegFP)
+        GPLoc _ _     -> return $ \arr_off -> Left (lbl, arr_off)
+        DataLoc _     -> return $ \arr_off -> Left (lbl, arr_off)
+        _ -> panic "TAC.CodeGen.getArrayAddr: (F)RegLoc"
+
+-- TODO: censor the output of the codegen monad to add .set at and .set noat
+-- | Store the value in a given register to the given LValue.
+--   May make use of $at if the LValue is an LDeref.
 integralStoreLValue :: Reg -> LValue -> CodeGen ()
 integralStoreLValue r (LVar u) = integralStoreName r u
-integralStoreLValue r (LIxArr u ixvar) = do
-    ArrTy _ elemTy <- askVarType u
-    integralStoreToArray elemTy r u ixvar
+integralStoreLValue r (LDeref u off) = do
+    ty <- askVarType u
+    case ty of
+        ArrTy _ elemTy -> integralStoreToArray elemTy r u off
+        -- TODO: Add PtrTy
+

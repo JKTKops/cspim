@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-module MIPS.Pretty (pretty) where
+module MIPS.Pretty {-(pretty)-} where
 
 import qualified Pretty as P
 import MIPS.Language
