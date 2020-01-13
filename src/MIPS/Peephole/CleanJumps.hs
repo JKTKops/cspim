@@ -2,10 +2,15 @@ module MIPS.Peephole.CleanJumps where
 
 import MIPS.Peephole
 import MIPS.Language
+import Compiler.SymbolTable
 
 import qualified Data.Map as M
+import Data.List (find)
 
 type JumpFact = M.Map Label Int
+
+initJumpFact :: JumpFact
+initJumpFact = M.fromList [("main", 1)]
 
 analyzeJumpCounts :: Monad m => FwdPass MipsDeclaration m JumpFact
 analyzeJumpCounts = fwdPass (fwdTransfer $ instTrans countLabelUses) noFwdRewrite
@@ -41,5 +46,5 @@ deleteUnusedLabels = fwdPass noFwdTransfer $ fwdRewrite 1 rewrite
 
 cleanJumps :: Monad m => [MipsLine] -> m [MipsLine]
 cleanJumps lines = do
-    (fact, lines') <- runMipsPeepholeFwd deleteFallthroughJumpsAndCountLabels lines M.empty
+    (fact, lines') <- runMipsPeepholeFwd deleteFallthroughJumpsAndCountLabels lines initJumpFact
     snd <$> runMipsPeepholeFwd deleteUnusedLabels lines' fact

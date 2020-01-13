@@ -2,9 +2,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
-module Compiler.SymbolTable where
+module Compiler.SymbolTable (module Compiler.SymbolTable, module Export) where
 
 import TAC.Language
+import qualified TAC.Language as Export (IsMap(..))
 import qualified MIPS.Language as Mips
 
 import Data.Int
