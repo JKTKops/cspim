@@ -25,7 +25,6 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
 import System.IO
-import System.IO.Unsafe
 import System.Exit
 import System.FilePath
 
@@ -40,6 +39,7 @@ import TAC.CodeGen (mipsCodeGenProc)
 import qualified TAC.Program as TAC (Program)
 import TAC.Pretty () -- pretty instances
 import qualified MIPS.Language as MIPS
+import qualified MIPS.Peephole.Pass as MIPS
 import MIPS.Pretty () -- pretty instances
 
 import Control.Monad
@@ -159,7 +159,7 @@ tac2MipsPhase = verboseLog "Start instruction selection..."
             <*< verboseLog "Done selecting instructions."
 
 optMipsPhase :: PhaseDesc MIPS.Program MIPS.Program
-optMipsPhase = pure
+optMipsPhase = return . MIPS.runMipsPeepholePass
 
 prettyMipsPhase :: PhaseDesc MIPS.Program Text
 prettyMipsPhase = verboseLog "pretty-printing MIPS..."

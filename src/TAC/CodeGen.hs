@@ -270,7 +270,7 @@ getSignage (RVar (Right _)) = return Signed
 
 -- | Generates code for a 'retrieve v' instruction.
 retrieveCodeGen :: Name -> CodeGen ()
-retrieveCodeGen uniq = integralStoreName RegV0 uniq
+retrieveCodeGen = integralStoreName RegV0
 
 gotoCodeGen :: Label -> CodeGen ()
 gotoCodeGen lbl = do
@@ -282,6 +282,7 @@ ifgotoCodeGen rvalue lbl_t lbl_f = do
     reg <- integralLoadRValueWithDefault rvalue compilerTemp1
     [lbl_t_name, lbl_f_name] <- mapM askLabelName ([lbl_t, lbl_f] :: [Label])
     -- The mips peephole optimizer will abuse the true-fallthrough to eliminate the branch
+    -- Obviously, we could do it here, but this is more robust.
     emit [mips| bnez ${reg}, @{lbl_t_name}
                 b            @{lbl_f_name} |]
 

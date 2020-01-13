@@ -1,7 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable, DeriveLift #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 module MIPS.Language where
 
 import Language.Haskell.TH.Syntax
+import Control.Lens.Prism
 
 import Data.Array
 import Data.Data
@@ -156,7 +159,7 @@ data MipsInstruction
  | MBltz  RSrc      Label -- branch less than zero
  | MJ               Label -- jump
  | MJal             Label -- jump and link
- | MJalr  RSrc      Label -- jump and link register
+ | MJalr  RSrc            -- jump and link register
  | MJr    RSrc            -- jump register
 
  -- | Load Instructions
@@ -219,11 +222,106 @@ data MipsInstruction
  | MNop       -- Do nothing.
  deriving (Eq, Ord, Show)
 
-data MipsDeclaration
+isBranch :: MipsInstruction -> Bool
+isBranch = \case
+    MB{}      -> True
+    MBc1t{}   -> True
+    MBc1f{}   -> True
+    MBeq{}    -> True
+    MBne{}    -> True
+    MBeqz{}   -> True
+    MBnez{}   -> True
+    MBge{}    -> True
+    MBgeu{}   -> True
+    MBgez{}   -> True
+    MBgezal{} -> True
+    MBgt{}    -> True
+    MBgtu{}   -> True
+    MBgtz{}   -> True
+    MBle{}    -> True
+    MBleu{}   -> True
+    MBlez{}   -> True
+    MBltzal{} -> True
+    MBlt{}    -> True
+    MBltu{}   -> True
+    MBltz{}   -> True
+    MJ{}      -> True
+    MJal{}    -> True
+    MJalr{}   -> True
+    MJr{}     -> True
+    _         -> False
+
+branchTarget :: MipsInstruction -> Maybe Label
+branchTarget MJalr{} = Nothing
+branchTarget MJr{}   = Nothing
+branchTarget inst
+  | not (isBranch inst) = Nothing
+  | otherwise = Just $ case inst of
+        MB lb        -> lb
+        MBc1t lb     -> lb
+        MBc1f lb     -> lb
+        MBeq _ _ lb  -> lb
+        MBne _ _ lb  -> lb
+        MBeqz _ lb   -> lb
+        MBnez _ lb   -> lb
+        MBge _ _ lb  -> lb
+        MBgeu _ _ lb -> lb
+        MBgez _ lb   -> lb
+        MBgezal _ lb -> lb
+        MBgt _ _ lb  -> lb
+        MBgtu _ _ lb -> lb
+        MBgtz _ lb   -> lb
+        MBle _ _ lb  -> lb
+        MBleu _ _ lb -> lb
+        MBlez _ lb   -> lb
+        MBltzal _ lb -> lb
+        MBlt _ _ lb  -> lb
+        MBltu _ _ lb -> lb
+        MBltz _ lb   -> lb
+        MJ lb        -> lb
+        MJal lb      -> lb
+
+readLabel :: MipsInstruction -> Maybe Label
+readLabel inst | isBranch inst = branchTarget inst
+readLabel (MLa _ (Left (lbl, _))) = Just lbl
+readLabel (MLb _ (Left (lbl, _))) = Just lbl
+readLabel (MLbu _ (Left (lbl, _))) = Just lbl
+readLabel (MLd _ (Left (lbl, _))) = Just lbl
+readLabel (MLh _ (Left (lbl, _))) = Just lbl
+readLabel (MLhu _ (Left (lbl, _))) = Just lbl
+readLabel (MLw _ (Left (lbl, _))) = Just lbl
+readLabel (MLwc1 _ (Left (lbl, _))) = Just lbl
+readLabel (MSb _ (Left (lbl, _))) = Just lbl
+readLabel (MSd _ (Left (lbl, _))) = Just lbl
+readLabel (MSh _ (Left (lbl, _))) = Just lbl
+readLabel (MSw _ (Left (lbl, _))) = Just lbl
+readLabel (MLD _ (Left (lbl, _))) = Just lbl
+readLabel (MLS _ (Left (lbl, _))) = Just lbl
+readLabel (MSD _ (Left (lbl, _))) = Just lbl
+readLabel (MSS _ (Left (lbl, _))) = Just lbl
+readLabel _ = Nothing
+
+data MipsDeclaration -- TODO directives should be attached to the instruction/label
+                     -- that they affect, instead of being their own line
      = MDirective Directive
      | MLabel     Label
      | MInst      MipsInstruction
      deriving (Eq, Ord, Show)
+
+_Directive :: Prism' MipsDeclaration Directive
+_Directive = prism' MDirective $ \case
+    MDirective d -> Just d
+    _            -> Nothing
+
+_Label :: Prism' MipsDeclaration Label
+_Label = prism' MLabel $ \case
+    MLabel l -> Just l
+    _        -> Nothing
+
+_Inst :: Prism' MipsDeclaration MipsInstruction
+_Inst = prism' MInst $ \case
+    MInst inst -> Just inst
+    _          -> Nothing
 
 data MipsLine = ML (Maybe MipsDeclaration) (Maybe String) -- declaration + comment
   deriving (Eq, Ord, Show)

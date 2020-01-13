@@ -104,7 +104,7 @@ makePMILift = do
                         []
                         (ConT ''Lift `AppT` ConT (mkName "ParsedMipsDeclaration"))
                         [FunD (mkName "lift") clauses']
-    return $ [pmiInstance, pmdInstance]
+    return [pmiInstance, pmdInstance]
 
 apply :: Name -> [Q Exp] -> Q Exp
 apply n = foldl appE (conE n)

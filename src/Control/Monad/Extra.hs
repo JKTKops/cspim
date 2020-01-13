@@ -1,5 +1,7 @@
 module Control.Monad.Extra where
 
+import Control.Monad
+
 whenM :: Monad m => m Bool -> m () -> m ()
 whenM mb a = ifM mb a (pure ())
 
@@ -13,3 +15,6 @@ ifM mb t f = mb >>= \b -> if b then t else f
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenJust (Just x) f = f x
 whenJust Nothing _  = pure ()
+
+guardM :: MonadPlus m => m Bool -> m ()
+guardM mb = mb >>= guard

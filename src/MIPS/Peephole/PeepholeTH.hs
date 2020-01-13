@@ -1,10 +1,10 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, QuasiQuotes #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 module MIPS.Peephole.PeepholeTH where
 
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
-import Mips.ParserTH -- has lots of utilities that I want
+import MIPS.ParserTH -- has lots of utilities that I want
 
 import Data.Maybe (fromJust)
 import Data.Either (lefts)
@@ -18,7 +18,7 @@ miName = fromJust <$> lookupTypeName "MipsInstruction"
 
 sourcesName, destsName :: Name
 sourcesName = mkName "instSources"
-destsName   = mkName "instDests"
+destsName   = mkName "instDest"
 
 mkSourcesAndDestsFuns :: Q [Dec]
 mkSourcesAndDestsFuns = do
@@ -39,12 +39,14 @@ mkSourcesAndDestsClauses con = do
                ++ " does not belong to type MipsInstruction"
     let arg_types = unpackFunType type_info
     (srcPats, srcs)   <- mkSrcPats arg_types
-    (destPats, dests) <- mkDestPats arg_types
+    (destPats, dest) <- mkDestPats arg_types
     sourceBody <- NormalB <$> [| lefts $(pure $ ListE srcs) |]
+    destBody <- NormalB <$> case dest of
+        []  -> [| Nothing |]
+        [d] -> [| Just $(varE d) |]
     let sourceClause = Clause [ConP con srcPats] sourceBody []
-        destsBody = NormalB $ ListE $ map VarE dests
-        destsClause = Clause [ConP con destPats] destsBody []
-    return (sourceClause, destsClause)
+        destClause = Clause [ConP con destPats] destBody []
+    return (sourceClause, destClause)
 
 mkSrcPats :: [Name] -> Q ([Pat], [Exp])
 mkSrcPats names = (reverse *** reverse) <$> foldM createPat ([], []) names

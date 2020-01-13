@@ -39,6 +39,7 @@ library:
   - hoopl
   - lens
   - mtl
+  - transformers
   - monad-validate
   - parsec
   - pretty

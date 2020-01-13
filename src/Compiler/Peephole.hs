@@ -11,7 +11,26 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes, ScopedTypeVariables #-}
 
-module Compiler.Peephole where
+module Compiler.Peephole
+    ( -- * Optimization functions
+      OptFun, PeepSize, emptyOptFun, contraMapOpt
+    -- * Rewrites and transfers
+    , FwdRewrite, BwdRewrite, fwdRewrite, bwdRewrite
+    , FwdTransfer, BwdTransfer, fwdTransfer, bwdTransfer
+    , noFwdRewrite, noBwdRewrite, noFwdTransfer, noBwdTransfer
+    , adjustFwdTransfer, adjustBwdTransfer
+    , adjustFwdRewrite, adjustBwdRewrite
+    , combineFwdRewrite, combineBwdRewrite
+    -- * Making Passes
+    , FwdPass, BwdPass, fwdPass, bwdPass
+    , interleaveFwdPass, interleaveBwdPass
+    , pairFwdPass, pairBwdPass
+    , modifyFwdPass, modifyBwdPass
+    -- * Consuming Passes
+    , analyzeAndRewriteFwd, analyzeAndRewriteBwd
+    , analyzeThenRewriteFwd, analyzeThenRewriteBwd
+    , analyzeFwd, analyzeBwd, rewriteFwd, rewriteBwd
+    ) where
 
 import Control.Monad.State
 import Control.Monad.Writer
@@ -53,7 +72,7 @@ putChanged p = sayChanged *> OptimizeT (put p)
 
 -- | Move the program held by the optimizer. Uses a rank 2 type to help protect against
 --   accidentally modifying the /program/ rather than just moving the zipper.
-moveProg :: Monad m => (Program inst -> Program inst) -> OptimizeT inst m ()
+moveProg :: Monad m => (forall inst. Program inst -> Program inst) -> OptimizeT inst m ()
 moveProg = OptimizeT . modify
 
 sendProg :: Monad m => (Program inst -> m a) -> OptimizeT inst m a
@@ -68,6 +87,23 @@ sayChanged = OptimizeT $ tell Changed
 listenChanged :: Monad m => OptimizeT inst m a -> OptimizeT inst m (a, Change)
 listenChanged t = OptimizeT $ listen (unOptimizeT t)
 
+-- | Take an OptimizeT action and iterate it until it returns NoChange.
+optFix :: Monad m => OptimizeT inst m a -> OptimizeT inst m [a]
+optFix opt = loop where
+  loop = do
+    (a0, change) <- listenChanged opt
+    case change of
+        NoChange -> return [a0]
+        Changed  -> liftA2 (:) (pure a0) loop
+
+optFix_ :: Monad m => OptimizeT inst m a -> OptimizeT inst m ()
+optFix_ opt = loop where
+  loop = do
+    (_, change) <- listenChanged opt
+    case change of
+        NoChange -> return ()
+        Changed  -> loop
+
 type OptFun inst m f = [inst] -> f -> m (Maybe [inst])
 type PeepSize = Int
 data Optimization inst m f =
@@ -77,8 +113,8 @@ data Optimization inst m f =
 emptyOptFun :: Applicative m => OptFun inst m f
 emptyOptFun _ _ = pure Nothing
 
-morphOpt :: (f' -> f) -> OptFun inst m f -> OptFun inst m f'
-morphOpt fun opt insts f' = opt insts (fun f')
+contraMapOpt :: (f' -> f) -> OptFun inst m f -> OptFun inst m f'
+contraMapOpt fun opt insts f' = opt insts (fun f')
 
 -- TODO: for MIPS, write functions (FwdRewrite MipsDeclaration m f -> FwdRewrite MipsLine m f)
 -- &c.
@@ -87,15 +123,30 @@ newtype BwdRewrite inst m f = BwdRewrite (PeepSize, OptFun inst m f)
 newtype FwdTransfer inst f = FwdTransfer { runFwdTransfer :: inst -> f -> f }
 newtype BwdTransfer inst f = BwdTransfer { runBwdTransfer :: inst -> f -> f }
 
-mkFwdRewrite :: PeepSize -> OptFun inst m f -> FwdRewrite inst m f
-mkFwdRewrite s r = FwdRewrite (s, r)
-mkBwdRewrite :: PeepSize -> OptFun inst m f -> BwdRewrite inst m f
-mkBwdRewrite s r = BwdRewrite (s, r)
+fwdRewrite :: PeepSize -> OptFun inst m f -> FwdRewrite inst m f
+fwdRewrite s r = FwdRewrite (s, r)
+bwdRewrite :: PeepSize -> OptFun inst m f -> BwdRewrite inst m f
+bwdRewrite s r = BwdRewrite (s, r)
+
+fwdTransfer :: (inst -> f -> f) -> FwdTransfer inst f
+bwdTransfer :: (inst -> f -> f) -> BwdTransfer inst f
+fwdTransfer = FwdTransfer
+bwdTransfer = BwdTransfer
+
+adjustFwdTransfer :: ((inst -> f -> f) -> (inst' -> f' -> f'))
+                  -> FwdTransfer inst f -> FwdTransfer inst' f'
+adjustFwdTransfer f (FwdTransfer t) = fwdTransfer (f t)
+
+adjustBwdTransfer :: ((inst -> f -> f) -> inst' -> f' -> f')
+                  -> BwdTransfer inst f -> BwdTransfer inst' f'
+adjustBwdTransfer f (BwdTransfer t) = bwdTransfer (f t)
 
 noFwdRewrite :: Applicative m => FwdRewrite inst m f
-noFwdRewrite = FwdRewrite (0, emptyOptFun)
 noBwdRewrite :: Applicative m => BwdRewrite inst m f
+noFwdRewrite = FwdRewrite (0, emptyOptFun)
 noBwdRewrite = BwdRewrite (0, emptyOptFun)
+noFwdTransfer :: FwdTransfer inst f
+noBwdTransfer :: BwdTransfer inst f
 noFwdTransfer = FwdTransfer $ const id
 noBwdTransfer = BwdTransfer $ const id
 
@@ -107,9 +158,9 @@ adjustBwdRewrite g (BwdRewrite (size, o)) = BwdRewrite (size, g o)
 class EndoArrow a where
     (^>>) :: (b' -> b) -> a b -> a b'
 instance EndoArrow (FwdRewrite inst m) where
-    (^>>) f = adjustFwdRewrite (morphOpt f)
+    (^>>) f = adjustFwdRewrite (contraMapOpt f)
 instance EndoArrow (BwdRewrite inst m) where
-    (^>>) f = adjustBwdRewrite (morphOpt f)
+    (^>>) f = adjustBwdRewrite (contraMapOpt f)
 
 combineFwdRewrite :: Monad m => FwdRewrite inst m f -> FwdRewrite inst m f
                   -> FwdRewrite inst m f
@@ -136,6 +187,21 @@ instance Monad m => Monoid (BwdRewrite inst m f) where
 
 data FwdPass inst m f = FwdPass (FwdTransfer inst f) (FwdRewrite inst m f)
 data BwdPass inst m f = BwdPass (BwdTransfer inst f) (BwdRewrite inst m f)
+
+fwdPass :: FwdTransfer inst f -> FwdRewrite inst m f -> FwdPass inst m f
+bwdPass :: BwdTransfer inst f -> BwdRewrite inst m f -> BwdPass inst m f
+fwdPass = FwdPass
+bwdPass = BwdPass
+
+modifyFwdPass :: (FwdTransfer inst f -> FwdTransfer inst' f')
+              -> (FwdRewrite inst m f -> FwdRewrite inst' m' f')
+              -> FwdPass inst m f -> FwdPass inst' m' f'
+modifyFwdPass f g (FwdPass t r) = FwdPass (f t) (g r)
+
+modifyBwdPass :: (BwdTransfer inst f -> BwdTransfer inst' f')
+              -> (BwdRewrite inst m f -> BwdRewrite inst' m' f')
+              -> BwdPass inst m f -> BwdPass inst' m' f'
+modifyBwdPass f g (BwdPass t r) = BwdPass (f t) (g r)
 
 interleaveFwdPass :: Monad m => FwdPass inst m f -> FwdPass inst m f -> FwdPass inst m f
 interleaveFwdPass (FwdPass t1 r1) (FwdPass t2 r2) =
@@ -182,6 +248,7 @@ applyOpt optimization fact = withProg $ \z@(ZL.Zip _ focus) -> do
         replace :: Int -> [inst] -> Program inst -> Program inst
         replace rm repl (ZL.Zip cs focus) = ZL.Zip cs (repl ++ drop rm focus)
 
+-- | Use a FwdPass to interleave analysis and rewriting.
 analyzeAndRewriteFwd :: forall inst m f. Monad m
                      => FwdPass inst m f -> [inst] -> f
                      -> m (f, [inst])
@@ -202,6 +269,7 @@ analyzeAndRewriteFwd (FwdPass ftransfer frewrite) insts init_fact =
         then return fact'
         else moveProg (fromJust . ZL.right) *> drive fact'
 
+-- | Use a BwdPass to interleave analysis and rewriting.
 analyzeAndRewriteBwd :: forall inst m f. Monad m
                      => BwdPass inst m f -> [inst] -> f
                      -> m (f, [inst])
@@ -220,56 +288,26 @@ analyzeAndRewriteBwd (BwdPass btransfer brewrite) insts init_fact =
         then return fact'
         else moveProg (fromJust . ZL.right) *> drive fact'
 
+-- | Use a FwdPass to first analyze the whole program, then rewrite it using the
+-- results of the analysis.
+analyzeThenRewriteFwd :: Monad m => FwdPass inst m f -> [inst] -> f -> m (f, [inst])
+analyzeThenRewriteFwd (FwdPass ftransfer frewrite) insts f =
+    analyzeFwd ftransfer insts f >>= analyzeAndRewriteFwd (FwdPass noFwdTransfer frewrite) insts
+
+-- | Use a FwdPass to first analyze the whole program, then rewrite it using the
+-- results of the analysis.
+analyzeThenRewriteBwd :: Monad m => BwdPass inst m f -> [inst] -> f -> m (f, [inst])
+analyzeThenRewriteBwd (BwdPass btransfer brewrite) insts f =
+    analyzeBwd btransfer insts f >>= analyzeAndRewriteBwd (BwdPass noBwdTransfer brewrite) insts
+
 analyzeFwd :: Monad m => FwdTransfer inst f -> [inst] -> f -> m f
 analyzeFwd t is f = fst <$> analyzeAndRewriteFwd (FwdPass t noFwdRewrite) is f
+
+analyzeBwd :: Monad m => BwdTransfer inst f -> [inst] -> f -> m f
 analyzeBwd t is f = fst <$> analyzeAndRewriteBwd (BwdPass t noBwdRewrite) is f
 
 rewriteFwd :: Monad m => FwdRewrite inst m () -> [inst] -> m [inst]
 rewriteFwd r is = snd <$> analyzeAndRewriteFwd (FwdPass noFwdTransfer r) is ()
+
+rewriteBwd :: Monad m => BwdRewrite inst m () -> [inst] -> m [inst]
 rewriteBwd r is = snd <$> analyzeAndRewriteBwd (BwdPass noBwdTransfer r) is ()
-
-{-
-Specific to MIPS:
-    let focus' = dropDecls rm focus
-        repl'  = (\dec -> ML (Just dec) Nothing) <$> repl
-    in  ZL.Zip cs (repl' ++ focus')
-  where
-    dropDecls :: Int -> [MipsLine] -> [MipsLine]
-    dropDecls n mls | n <= 0 = mls
-    dropDecls n (ml:mls) = let x = if has (declaration._Just) ml then 1 else 0
-                           in dropDecls (n - x) mls
--}
-
--- | Apply an optimization everywhere on a zipper.
--- Moves to the start of the zipper, then applies the transfer, moves right,
--- and repeats until it reaches the end.
---
--- The final zipper is at the end.
-applyOptEverywhere :: Monad m => OptimizeT inst m () -> OptimizeT inst m ()
-applyOptEverywhere opt = do
-    moveProg ZL.start
-    loop
-    -- arr ZL.start >>> loop
-  where loop = do
-            optFix_ opt
-            zl <- getProg
-            if ZL.isEnd zl
-            then return ()
-            else moveProg (fromJust . ZL.right) *> loop
-
--- | Take an OptimizeT action and iterate it until it returns NoChange.
-optFix :: Monad m => OptimizeT inst m a -> OptimizeT inst m [a]
-optFix opt = loop where
-  loop = do
-    (a0, change) <- listenChanged opt
-    case change of
-        NoChange -> return [a0]
-        Changed  -> liftA2 (:) (pure a0) loop
-
-optFix_ :: Monad m => OptimizeT inst m a -> OptimizeT inst m ()
-optFix_ opt = loop where
-  loop = do
-    (_, change) <- listenChanged opt
-    case change of
-        NoChange -> return ()
-        Changed  -> loop
