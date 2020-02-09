@@ -5,7 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Compiler.Monad.Class
     ( -- * Responses from compiler monads
-      These(..)
+      These(..), CompilerOutput, Dump, getOutput, getDumps
 
     -- * The Compiler monad and the MonadCompiler classes
     , Compiler(..), runCompiler, runCompilerIO, testCompilerIO, testCompilerIOWithGenSym
@@ -21,6 +21,9 @@ module Compiler.Monad.Class
     -- * Throw any string as an error, generally indicating an invariant violation.
     , panic
 
+    -- * Perform a data dump if a given flag is set
+    , dumpFlag
+
     ) where
 
 import Pretty
@@ -34,8 +37,10 @@ import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Bifunctor
 
+import Control.Monad.Extra
 import Control.Monad.Validate
 import Control.Monad.Identity
+import Control.Arrow ((***))
 
 import Control.Monad.Reader
 import Control.Monad.Except
@@ -49,12 +54,21 @@ import Text.Parsec (ParsecT)
 
 import qualified Control.Monad.Validate.Internal as V
 
-import Control.Monad.Debug
+--import Control.Monad.Debug
 
 -- | The classic (E + A + EA) data type. Has the obvious functor instance,
 --   But /not/ the applicative/monad instances. Use 'Validate' instead.
 data These e a = This e | That a | These e a
   deriving (Eq, Ord, Show)
+
+type Dump = (Flag, Text)
+
+newtype CompilerOutput a = CompilerOutput { getAllOutput :: (These [CErr] a, [Dump]) }
+getOutput :: CompilerOutput a -> These [CErr] a
+getOutput = fst . getAllOutput
+
+getDumps :: CompilerOutput a -> [Dump]
+getDumps = snd . getAllOutput
 
 -- | The class representing monads in the compiler tool stack.
 --   Compiler monads must be able to make verbosity logs, raise warnings and errors,
@@ -97,6 +111,15 @@ rethrowCErr (CErr VerboseLog e) = verboseLog $ pretty e
 rethrowCErr (CErr Warning w) = compilerWarning w
 rethrowCErr (CErr Error e) = compilerError e
 
+-- | If the given flag is set, dump the given text. The text is associated with the flag
+-- that caused it to be dumped so that it can be output to the correct file later.
+--
+-- TODO: This should maybe move into the MonadCompiler class.
+dumpFlag :: Flag -> Text -> Compiler ()
+dumpFlag flag dump =
+    whenM (isFlagSet flag <$> compilerFlags) $
+        C $ Strict.tell $ singleton (flag, dump)
+
 -- | Some monads in the compiler stack are additionally capable of running the
 --   underlying compiler monad to obtain a (monadic) representation of the current
 --   error\/warn\/ok state.
@@ -109,7 +132,8 @@ class MonadCompiler m => FullMonadCompiler m where
 
 -- | The monadic type of compilation actions. Compilation actions have access to the
 --   compilation flags, can raise warnings, and can throw errors.
-newtype Compiler a = C { unC :: ReaderT Flags (ValidateT (DList CErr) UniqueSM) a }
+newtype Compiler a = C { unC :: ReaderT Flags (ValidateT (DList CErr)
+                                               (Strict.WriterT (DList Dump) UniqueSM)) a }
   deriving (Functor, Applicative, Monad)
 
 -- | Run a compilation action with the given flags, returning either:
@@ -119,25 +143,31 @@ newtype Compiler a = C { unC :: ReaderT Flags (ValidateT (DList CErr) UniqueSM) 
 --   'These' errs a - the result of the action, and a (nonempty-)list of compilation warnings
 --
 --   'That' a       - the result of the action, which completed with no errors or warnings.
-runCompiler :: Compiler a -> UniqueSupply -> Flags -> These [CErr] a
-runCompiler (C m) us flags = runReaderT m flags & evalValidateT & evalUniqueSM us & first toList
+runCompiler :: Compiler a -> UniqueSupply -> Flags -> CompilerOutput a
+runCompiler (C m) us flags = runReaderT m flags
+                             & evalValidateT
+                             & Strict.runWriterT
+                             & evalUniqueSM us
+                             & first toList *** toList
+                             & CompilerOutput
 
 -- | Run a compiler in the IO monad, using the standard unique supply.
-runCompilerIO :: Compiler a -> Flags -> IO (These [CErr] a)
+runCompilerIO :: Compiler a -> Flags -> IO (CompilerOutput a)
 runCompilerIO c flags = do
     us <- mkUniqueSupply
     return $ runCompiler c us flags
 
 -- | Use this in functions that need to test run compilers.
 --   It resets the gensym to counter 0 and inc 1, then calls runCompilerIO.
-testCompilerIO :: Compiler a -> Flags -> IO (These [CErr] a)
+testCompilerIO :: Compiler a -> Flags -> IO (CompilerOutput a)
 testCompilerIO = testCompilerIOWithGenSym 0 1
 
-testCompilerIOWithGenSym :: Int -> Int -> Compiler a -> Flags -> IO (These [CErr] a)
+-- | 'testCompilerIO' but with more control over the gensym.
+-- First arg is the initital value, second is the increment.
+testCompilerIOWithGenSym :: Int -> Int -> Compiler a -> Flags -> IO (CompilerOutput a)
 testCompilerIOWithGenSym init step c flags = do
     initGenSym init step
     runCompilerIO c flags
-
 
 instance MonadCompiler Compiler where
     verboseLog s = C $ dispute $ singleton $ CErr VerboseLog (VL s)
@@ -149,14 +179,18 @@ instance MonadCompiler Compiler where
       where toError (CErr _ e) = CErr Error e
     compilerFlags    = C ask
 
-    freshUnique = C $ lift $ lift Hoopl.freshUnique
-    freshLabel = C $ lift $ lift Hoopl.freshLabel
+    freshUnique = C $ lift $ lift $ lift Hoopl.freshUnique
+    freshLabel  = C $ lift $ lift $ lift Hoopl.freshLabel
 
 instance FullMonadCompiler Compiler where
     runMonadCompiler (C m) = C $ do
-        us0   <- lift $ lift unsafeGetUniqueSupplyM
+        us0   <- lift $ lift $ lift unsafeGetUniqueSupplyM
         flags <- ask
-        return $ runReaderT m flags & evalValidateT & evalUniqueSM us0
+        return $ runReaderT m flags
+               & evalValidateT
+               & Strict.runWriterT
+               & evalUniqueSM us0
+               & fst
 
 instance MonadCompiler m => MonadCompiler (ReaderT r m) where
     verboseLog       = lift . verboseLog

@@ -14,7 +14,6 @@ so we do it with 'unsafePerformIO'. Similarly, we execute cpp over the input fil
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 module Compiler.Pipeline where
-import Compiler.Pipeline.Internal
 
 import Options
 import Pretty
@@ -63,7 +62,8 @@ runPipeline opts startPhase fname = do
     source <- T.readFile fname
     result <- runCompilerIO (compileAction source) (opts^.flags)
     let outFile = fromMaybe (dropExtension fname <.> outputExt) (opts^.outputFile)
-    case result of
+    -- TODO: handle the dumps!
+    case getOutput result of
         This err    -> exitWithCompileError err
         That result -> T.writeFile outFile result
         These errs result -> do
@@ -145,7 +145,7 @@ parsePhase fname src = do
 
   where dumpTac prog = do
             verboseLog "Yes..."
-            dump (dropExtension fname <.> dumpExtension DumpTac, pretty prog)
+            dumpFlag DumpTac $ pretty prog
             verboseLog "Dumped TAC."
 
 -- Note: can't dump inside optimizer since it won't dump at all if it crashes
@@ -159,7 +159,9 @@ tac2MipsPhase = verboseLog "Start instruction selection..."
             <*< verboseLog "Done selecting instructions."
 
 optMipsPhase :: PhaseDesc MIPS.Program MIPS.Program
-optMipsPhase = return . MIPS.runMipsPeepholePass
+optMipsPhase = verboseLog "Start MIPS optimizations..."
+           >*> return . MIPS.runMipsPeepholePass
+           <*< verboseLog "Done optimizing MIPS."
 
 prettyMipsPhase :: PhaseDesc MIPS.Program Text
 prettyMipsPhase = verboseLog "pretty-printing MIPS..."
@@ -168,13 +170,14 @@ prettyMipsPhase = verboseLog "pretty-printing MIPS..."
 
 -- Notation: c = C, i = preprocessed, m = MIPS
 cmPipe, imPipe :: FilePath -> Pipe Compiler Text Text
-cmPipe fname = cppPhase :|> parsePhase fname
-               :|> optTacPhase :|> tac2MipsPhase
-               :|> optMipsPhase :|> prettyMipsPhase :|> End
+cmPipe fname = cppPhase :|> corePipe fname
 
-imPipe fname = parsePhase fname
-               :|> optTacPhase :|> tac2MipsPhase
-               :|> optMipsPhase :|> prettyMipsPhase :|> End
+imPipe = corePipe
+
+corePipe :: FilePath -> Pipe Compiler Text Text
+corePipe fname = parsePhase fname
+           :|> optTacPhase :|> tac2MipsPhase
+           :|> optMipsPhase :|> prettyMipsPhase :|> End
 
 execPipe :: Monad m => Pipe m a b -> a -> m b
 execPipe End = pure
