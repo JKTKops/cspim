@@ -5,7 +5,6 @@ import MIPS.Language
 import Compiler.SymbolTable
 
 import qualified Data.Map as M
-import Data.List (find)
 
 type JumpFact = M.Map Label Int
 

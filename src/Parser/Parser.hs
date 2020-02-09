@@ -102,11 +102,8 @@ statement = expecting "statement" $
             labeledStatement
         <|> ((exprStmt <|> retStmt <|> gotoStmt) <* semi)
         <|> (semi $> emptyGraph)
+        <|> ifStmt
         <|> block
--- TODO NEXT: re-combine Return and SetRV, have code generator generate a return label at the
--- end of each function and put the returning code there
--- i.e. assign $v0; goto $L15; $L15: ... # start return sequence
--- A mips optimizer in the future could do small-block catentation if desired.
 
 -- | Parse a labeled statement.
 --   TODO: Labels include switch statement `case` and `default` labels.
@@ -166,16 +163,30 @@ gotoStmt = do
     fakeLbl <- freshLabel
     return $ mkBranch lbl |*><*| mkLabel fakeLbl
 
+ifStmt :: Parser (Graph Insn O O)
+ifStmt = do
+    reserved "if"
+    (rvalue, exprGraph) <- parens parseExprAsRV
+    body <- statement
+    true_lbl <- freshLabel
+    false_lbl <- freshLabel
+    return $ exprGraph <*|*> mkLast (IfGoto rvalue true_lbl false_lbl)
+      |*><*| mkLabel true_lbl <*|*> body <*|*> mkBranch false_lbl
+      |*><*| mkLabel false_lbl
+
 -- Even if we should generate a TacExp here with the output of the final computation
 -- we can't always do that because sometimes we need just the RValue (e.x. returning).
 -- So we generate an extra temporary, and return an RVar with that temporary's unique.
 -- The optimizer can eliminate it.
+
 -- | Parse a C expression, such as what would appear on the right hand side of an assignment.
 --   Returns an RValue with either the constant value or the unique of the variable
 --   which will hold the final value of the expression.
-
-parseTacExp :: Parser TacExp
-parseTacExp = ValExp <$> parseRValue
+parseExprAsRV :: Parser (RValue, Graph Insn O O)
+parseExprAsRV = do
+    Expr exprGraph tacExp ty <- parseExpr
+    (gph, rv) <- gatherExpToRValue tacExp ty
+    return (rv, exprGraph <*|*> gph)
 
 --------------------------------------------------------------------------------------
 --

@@ -2,6 +2,7 @@ module Parser.Expr
     ( Expr(..)
     , parseExpr
     , parseRValue
+    , gatherExpToRValue
     ) where
 
 import Pretty
@@ -155,6 +156,8 @@ gather exp ty          = do
     temp <- mkFreshLocalTempUniq ty
     return (mkMiddle $ LVar temp := exp, RVar (Left temp))
 
+gatherExpToRValue = gather
+
 commonRealType :: Type -> Type -> Parser Type
 commonRealType ty1 ty2
     | isIntegralTy ty1
@@ -170,3 +173,4 @@ commonRealType ty1 ty2
           | IntTy Unsigned <- ty1 = IntTy Unsigned
           | IntTy Unsigned <- ty2 = IntTy Unsigned
           | otherwise             = IntTy Signed
+
