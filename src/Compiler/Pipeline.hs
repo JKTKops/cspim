@@ -14,6 +14,7 @@ so we do it with 'unsafePerformIO'. Similarly, we execute cpp over the input fil
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 module Compiler.Pipeline where
+import Compiler.Pipeline.CPP
 
 import Options
 import Pretty
@@ -59,8 +60,7 @@ compile opts filename =
 
 runPipeline :: Options -> Phase -> FilePath -> IO ()
 runPipeline opts startPhase fname = do
-    source <- T.readFile fname
-    result <- runCompilerIO (compileAction source) (opts^.flags)
+    result <- runCompilerIO compileAction (opts^.flags)
     let outFile = fromMaybe (dropExtension fname <.> outputExt) (opts^.outputFile)
     -- TODO: handle the dumps!
     case getOutput result of
@@ -70,7 +70,7 @@ runPipeline opts startPhase fname = do
             printCErrs errs
             T.writeFile outFile result
 
-  where compileAction = finalizeStdErrOutput . pipeline (startPhase, endPhase) fname
+  where compileAction = finalizeStdErrOutput $ pipeline (startPhase, endPhase) fname
 
         -- This is abstraction overkill currently but may not be in the future.
         -- "Pick the earliest end phase which is enabled"
@@ -102,8 +102,8 @@ data Phase
      | PrettyMipsPhase
   deriving (Eq, Ord, Show, Enum, Bounded)
 
-pipeline :: (Phase, Phase) -> FilePath -> Text -> Compiler Text
-pipeline phases fname = execPipe (pickPipe phases fname)
+pipeline :: (Phase, Phase) -> FilePath -> Compiler Text
+pipeline phases fname = execPipe (pickPipe phases fname) fname
 
 data Pipe m a b where
     End :: Pipe m a a
@@ -131,8 +131,8 @@ type PhaseDesc a b = a -> Compiler b
 (<*<) f b a = f a <* b
 infixl 4 >*>, <*<
 
-cppPhase :: PhaseDesc Text Text
-cppPhase = pure -- todo
+cppPhase :: PhaseDesc FilePath Text
+cppPhase = pure . preprocess
 
 parsePhase :: FilePath -> PhaseDesc Text TAC.Program
 parsePhase fname src = do
@@ -169,10 +169,9 @@ prettyMipsPhase = verboseLog "pretty-printing MIPS..."
               <*< verboseLog "Done."
 
 -- Notation: c = C, i = preprocessed, m = MIPS
-cmPipe, imPipe :: FilePath -> Pipe Compiler Text Text
+cmPipe, imPipe :: FilePath -> Pipe Compiler FilePath Text
 cmPipe fname = cppPhase :|> corePipe fname
-
-imPipe = corePipe
+imPipe = cmPipe -- cpp will nicely not touch files with .i extensions :)
 
 corePipe :: FilePath -> Pipe Compiler Text Text
 corePipe fname = parsePhase fname
@@ -183,7 +182,7 @@ execPipe :: Monad m => Pipe m a b -> a -> m b
 execPipe End = pure
 execPipe (f :|> pipe) = f >=> execPipe pipe
 
-pickPipe :: (Phase, Phase) -> FilePath -> Pipe Compiler Text Text
+pickPipe :: (Phase, Phase) -> FilePath -> Pipe Compiler FilePath Text
 pickPipe (CppPhase, PrettyMipsPhase)   = cmPipe
 pickPipe (ParsePhase, PrettyMipsPhase) = imPipe
 pickPipe (CppPhase, CppPhase)          = const (cppPhase :|> End)

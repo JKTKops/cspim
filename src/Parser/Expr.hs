@@ -36,11 +36,10 @@ parseExpr = join (P $ buildExpressionParser opTableAboveTernary under) <?> "expr
 parseExprBelowTernary :: Parser Expr
 parseExprBelowTernary = join $ P $ buildExpressionParser opTableBelowTernary term
 
--- TODO!!! Fix type!!!
 term :: ParsecT Text ParserState Compiler ParsedExpr
 term = do
     rv <- unP parseRValue
-    pure $ return $ Expr emptyGraph (ValExp rv) $ IntTy Unsigned
+    pure $ return $ Expr emptyGraph (ValExp rv) $ IntTy Unsigned -- TODO: correct this type
 
 parseRValue :: Parser RValue
 parseRValue = RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))

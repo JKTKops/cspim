@@ -197,7 +197,7 @@ parseExprAsRV = do
 testParser :: Show a => Parser a -> Text -> IO String
 testParser p src = do
     result <- testCompilerIO (runParser p "test" src) noFlags
-    case result of
+    case getOutput result of
         This errs -> mapM_ (T.putStrLn . pretty) errs >> return ""
         These errs a -> mapM_ (T.putStrLn . pretty) errs >> return (show a)
         That a -> return (show a)
