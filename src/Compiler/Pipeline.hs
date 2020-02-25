@@ -3,11 +3,7 @@
 This module handles the entire compiler pipeline. That includes constructing the compiler
 phases and composing them according to the input file extension and stopping phase.
 
-Since I'm not using Polysemy in this project, it's difficult to intersperse IO with
-compiling actions, and modifying the Compiler monad to log the things it should dump
-would be very messy. And dumping is primarily a debug action and it's /always/ one-shot,
-so we do it with 'unsafePerformIO'. Similarly, we execute cpp over the input file with
-'unsafePerformIO'.
+We execute cpp over the input file with 'unsafePerformIO'; see Compiler.Pipeline.CPP
 
 -}
 {-# LANGUAGE DataKinds #-}
@@ -51,17 +47,23 @@ compile :: Options -> FilePath -> IO ()
 compile opts filename =
     let ext = takeExtension filename
     in case ext of
-        ""   -> do putStrLn "file with no extension given - cspim does not contain a linker."
+        ""   -> do putStrLn "file with no extension given - don't know how to proceed."
                    exitWith (ExitFailure 1)
         ".c" -> runPipeline opts CppPhase filename
         ".i" -> runPipeline opts ParsePhase filename
+        ".o" -> noLinker
+        ".s" -> noLinker
         _    -> do putStrLn $ "file extension '" ++ ext ++ "' not recongized."
                    exitWith (ExitFailure 1)
+  where
+    noLinker = do putStrLn "cspim cannot link files (QtSpim only takes assembly)"
+                  exitWith (ExitFailure 1)
 
 runPipeline :: Options -> Phase -> FilePath -> IO ()
 runPipeline opts startPhase fname = do
     result <- runCompilerIO compileAction (opts^.flags)
-    let outFile = fromMaybe (dropExtension fname <.> outputExt) (opts^.outputFile)
+    let outFile = fromMaybe (rawFname <.> outputExt) (opts^.outputFile)
+    writeDumps dumpFileName (getDumps result)
     -- TODO: handle the dumps!
     case getOutput result of
         This err    -> exitWithCompileError err
@@ -70,7 +72,9 @@ runPipeline opts startPhase fname = do
             printCErrs errs
             T.writeFile outFile result
 
-  where compileAction = finalizeStdErrOutput $ pipeline (startPhase, endPhase) fname
+  where rawFname = dropExtension fname
+        dumpFileName = if (opts^.flags) ? DumpToFile then Just rawFname else Nothing
+        compileAction = finalizeStdErrOutput $ pipeline (startPhase, endPhase) fname
 
         -- This is abstraction overkill currently but may not be in the future.
         -- "Pick the earliest end phase which is enabled"
@@ -81,6 +85,14 @@ runPipeline opts startPhase fname = do
         outputExt = case endPhase of
             PrettyMipsPhase -> "s"
             CppPhase        -> "i"
+
+writeDumps :: Maybe FilePath -> [Dump] -> IO ()
+writeDumps fp dumps = forM_ dumps $ \(flag, text) -> do
+    hdl <- handleFor flag
+    T.hPutStrLn hdl text
+  where handleFor flag = case fp of
+            Nothing -> pure stderr
+            Just fn -> openFile (fn <.> flagSkewerCase flag) WriteMode
 
 exitWithCompileError :: [CErr] -> IO ()
 exitWithCompileError errs = do
@@ -148,10 +160,8 @@ parsePhase fname src = do
             dumpFlag DumpTac $ pretty prog
             verboseLog "Dumped TAC."
 
--- Note: can't dump inside optimizer since it won't dump at all if it crashes
--- (CompilerT :( ) so just dump the final output and use Hoopl fuel to debug it.
 optTacPhase :: PhaseDesc TAC.Program TAC.Program
-optTacPhase = pure -- TODO setup --dump-simpl
+optTacPhase = pure -- TODO setup --dump-simpl (optimizer should dump while working)
 
 tac2MipsPhase :: PhaseDesc TAC.Program MIPS.Program
 tac2MipsPhase = verboseLog "Start instruction selection..."

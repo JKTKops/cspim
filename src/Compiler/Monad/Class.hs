@@ -36,6 +36,7 @@ import Data.DList
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Bifunctor
+import qualified Data.Text as T
 
 import Control.Monad.Extra
 import Control.Monad.Validate
@@ -118,7 +119,8 @@ rethrowCErr (CErr Error e) = compilerError e
 dumpFlag :: Flag -> Text -> Compiler ()
 dumpFlag flag dump =
     whenM (isFlagSet flag <$> compilerFlags) $
-        C $ Strict.tell $ singleton (flag, dump)
+        C $ Strict.tell $ singleton (flag, header <> dump)
+  where header = T.center 40 '=' (T.pack $ flagSkewerCase flag) <> "\n"
 
 -- | Some monads in the compiler stack are additionally capable of running the
 --   underlying compiler monad to obtain a (monadic) representation of the current
@@ -148,7 +150,7 @@ runCompiler (C m) us flags = runReaderT m flags
                              & evalValidateT
                              & Strict.runWriterT
                              & evalUniqueSM us
-                             & first toList *** toList
+                             & first toList *** toList -- this is BiFunctor first, not arrow
                              & CompilerOutput
 
 -- | Run a compiler in the IO monad, using the standard unique supply.
@@ -186,11 +188,12 @@ instance FullMonadCompiler Compiler where
     runMonadCompiler (C m) = C $ do
         us0   <- lift $ lift $ lift unsafeGetUniqueSupplyM
         flags <- ask
-        return $ runReaderT m flags
-               & evalValidateT
-               & Strict.runWriterT
-               & evalUniqueSM us0
-               & fst
+        let stat = runReaderT m flags
+                 & evalValidateT
+                 & Strict.runWriterT
+                 & evalUniqueSM us0
+        Strict.tell (snd stat) -- otherwise we throw away the dumps
+        return $ fst stat
 
 instance MonadCompiler m => MonadCompiler (ReaderT r m) where
     verboseLog       = lift . verboseLog
