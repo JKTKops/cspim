@@ -1,3 +1,9 @@
+# Done For Now
+
+Now that CS233@UIUC's Fall 2019 SpimBot competition has ended (I won!), my interest in the project has been severely waning. Chief among several issues is that the rushed aspects of the project accrued quite some technical debt that is still hard to work with. And, extremely annoyingly, `TemplateHaskell` and Intero do not play together well, and this project uses significant amounts of `TemplateHaskell`. In the compiler's current state, it implements `goto` and `if` (but not `else`) as well as function definitions and calls, which is more than enough to support a Turing-complete subset of C. The project also has an engine for optimizing the output MIPS. Ideally, this engine would've been realized with a pattern-based DSL, but the tech debt of not parameterizing the `MipsInstruction` type with the type of registers it contains caught up to me. This refactor would be worth digging time into on return. When the ghcide + hie engine is ready, I may return to this project (assuming that it plays well with `TemplateHaskell`) to implement the remaining control flow and an optimization engine that works on the IR.
+
+The old README can be seen below.
+
 # cspim
 
 A C-to-MIPS compiler targetting QtSpim. Inspired for CS233@UIUC's SpimBot competition, but the plan is to grow the project beyond that.
@@ -23,7 +29,7 @@ Planned features:
 - [x] return statements
 - [ ] if, else, for, while, do-while control flow
 - [x] goto
-- [ ] basic C expressions with operators (in significant progress)
+- [x] basic C expressions with operators (in significant progress)
 - [ ] arrays
 - [ ] typedefs
 - [ ] structs
@@ -32,7 +38,4 @@ These additional features are planned longer-term goals:
 
 - [ ] Optimization engine
 - [ ] Register allocator (+ tagging variables with 'live accross function call' so that temps can be saved)
-- [ ] floating point types and operations
- 
-If CSpim becomes a powerful enough compiler, it may eventually be a target for ProtoHaskell so that I can say I've written an
-end-to-end Haskell compiler :)
+- [ ] floating point types and operation
