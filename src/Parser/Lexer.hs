@@ -29,9 +29,10 @@ natural = lexeme nat <?> "natural"
 float :: Monad m => Lexer u m Double
 float = lexeme flt <?> "float"
 
-dot, semi :: Monad m => Lexer u m ()
-dot  = lexeme (char '.' $> ()) <?> "`.'"
-semi = lexeme (char ';' $> ()) <?> "`;'"
+dot, comma, semi :: Monad m => Lexer u m ()
+dot   = lexeme (char '.' $> ()) <?> "`.'"
+comma = lexeme (char ',' $> ()) <?> "`,'"
+semi  = lexeme (char ';' $> ()) <?> "`;'"
 
 reserved :: Monad m => String -> Lexer u m ()
 reserved s = lexeme (string s *> notFollowedBy alphaNum) <?> "`" ++ s ++ "'"

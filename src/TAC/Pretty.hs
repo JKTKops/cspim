@@ -184,11 +184,13 @@ instance Ppr Label where
     ppr lbl = text <$> askLabelName lbl
 
 instance Pretty Type where
-    pretty (CharTy signage) = pretty signage <> " char"
+    pretty (CharTy signage)  = pretty signage <> " char"
     pretty (ShortTy signage) = pretty signage <> " short"
     pretty (IntTy signage)   = pretty signage <> " int"
     pretty FloatTy           = "float"
     pretty DoubleTy          = "double"
+    pretty VoidTy            = "void"
+    pretty (FunTy r as)      = pretty r <> "(" <> T.intercalate "," (map pretty as)
     pretty (ArrTy l ty)      = pretty ty <> "[" <> pretty l <> "]"
 instance Pretty Signage where
     pretty Signed   = "signed"

@@ -137,7 +137,7 @@ instance Pretty MipsLine where
     ppr (ML Nothing (Just com)) = text "#" <+> ppr com
     ppr (ML Nothing Nothing) = empty
 
-    pprList = vsep . map ppr
+    pprList ls = vsep (map ppr ls) <> text "\n"
 
 instance Pretty MipsDeclaration where
     ppr (MDirective directive) = ppr directive

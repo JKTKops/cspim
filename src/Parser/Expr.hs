@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification #-}
 module Parser.Expr
     ( Expr(..)
     , parseExpr
@@ -10,14 +11,16 @@ import TAC.Pretty
 
 import Text.Parsec.Expr hiding (Operator)
 import qualified Text.Parsec.Expr as Parsec
-import Text.Parsec hiding ((<|>), (<?>))
+import Text.Parsec as TP hiding ((<|>), (<?>))
 import Data.Text (pack, Text)
 
 import Parser.Monad
 import Compiler.Monad
+import Compiler.SymbolTable
 import TAC.Program
 
-import Control.Monad (join)
+import Data.Function (on)
+import Control.Monad (join, when, unless)
 import Control.Monad.Debug
 
 data Expr = Expr
@@ -25,21 +28,82 @@ data Expr = Expr
     , exprResult   :: TacExp
     , exprResultTy :: Type
     }
+
+-- | ParsedExpr actions should /not/ do any parsing. They should be used for the
+-- underlying CSpim parser actions, like 'mkFreshLocalTempUniq' or 'fail'.
+-- The correct way to solve this problem would be to copy the code for Parsec's
+-- buildExpressionParser, and allow monadic operator functions.
 type ParsedExpr = Parser Expr
 
 type Operator = Parsec.Operator Text ParserState Compiler ParsedExpr
+type TermParser a = ParsecT Text ParserState Compiler a
 
 parseExpr :: Parser Expr
 parseExpr = join (P $ buildExpressionParser opTableAboveTernary under) <?> "expression"
   where under = pure <$> unP parseExprBelowTernary
 
+parseExprAsRvalue :: Parser (Graph Insn O O, RValue, Type)
+parseExprAsRvalue = do
+    Expr g res ty <- parseExpr
+    (g', rv) <- gather res ty
+    return (g <*|*> g', rv, ty)
+
 parseExprBelowTernary :: Parser Expr
 parseExprBelowTernary = join $ P $ buildExpressionParser opTableBelowTernary term
 
-term :: ParsecT Text ParserState Compiler ParsedExpr
+term :: TermParser ParsedExpr
 term = do
     rv <- unP parseRValue
-    pure $ return $ Expr emptyGraph (ValExp rv) $ IntTy Unsigned -- TODO: correct this type
+    expr <- case rv of
+        RVar (Left uniq)      -> identifierTerm uniq
+        RVar (Right constant) -> constantTerm constant
+
+    pure $ return expr
+    -- pure $ return $ Expr emptyGraph (ValExp rv) $ IntTy Unsigned -- TODO: correct this type
+
+identifierTerm :: Unique -> TermParser Expr
+identifierTerm uniq = do
+    mArgs <- TP.optionMaybe $ tpParens $ unP parseExprAsRvalue `TP.sepBy` unP comma
+    case mArgs of
+        Nothing ->   staticIdTerm uniq
+        Just args -> funIdTerm uniq args
+
+staticIdTerm :: Unique -> TermParser Expr
+staticIdTerm uniq = do
+    symTab <- _symTab <$> getState
+    let Just ty = lookupVarType symTab uniq
+    when (isFunTy ty) $ fail "CSpim doesn't support function pointers."
+    return $ Expr emptyGraph (ValExp $ RVar $ Left uniq) ty
+
+newtype ArgMonoid = AM { getAM :: (Graph Insn O O, [RValue]) }
+instance Semigroup ArgMonoid where
+    AM (g1, rvs1) <> AM (g2, rvs2) = AM (g1 <*|*> g2, rvs1 <> rvs2)
+instance Monoid ArgMonoid where mempty = AM (emptyGraph, [])
+funIdTerm :: Unique -> [(Graph Insn O O, RValue, Type)] -> TermParser Expr
+funIdTerm uniq args = do
+    symTab <- _symTab <$> getState
+    let Just ty = lookupVarType symTab uniq
+        Just funName = lookupVarName symTab uniq
+        actArgTypes = map thd args
+    unless (isFunTy ty) $ fail $ "Cannot call non-function `" <> funName <> "'"
+    let FunTy retTy formalArgTypes = ty
+    when (((/=) `on` length) formalArgTypes actArgTypes) $ unP $ customParseError
+        $ FunctionCallBadlyTyped (pack funName) formalArgTypes actArgTypes
+
+    resultTemp  <- unP $ mkFreshLocalTempUniq retTy
+    returnLabel <- unP freshLabel
+    let (argGraph, rvs) = getAM $ foldMap (\(g, r, _) -> AM (g, [r])) args
+        callInst = Call uniq rvs returnLabel
+        retInst  = Retrieve resultTemp
+        graph = argGraph <*|*>  mkLast callInst
+                         |*><*| mkLabel returnLabel
+                         <*|*>  mkMiddle retInst
+
+    return $ Expr graph (ValExp $ RVar $ Left resultTemp) retTy
+  where thd (_, _, c) = c
+
+constantTerm :: Constant -> TermParser Expr
+constantTerm c = return $ Expr emptyGraph (ValExp $ RVar $ Right c) $ IntTy Unsigned
 
 parseRValue :: Parser RValue
 parseRValue = RVar <$> ((Left <$> (identifier >>= uniqueOf)) <|> (Right . IntConst <$> natural))
@@ -173,3 +237,60 @@ commonRealType ty1 ty2
           | IntTy Unsigned <- ty2 = IntTy Unsigned
           | otherwise             = IntTy Signed
 
+
+
+
+--------------------------------------------------------------------------------------
+--
+-- Alternative to Nested Parser Strategy
+--
+--------------------------------------------------------------------------------------
+
+{-
+in theory, using this stuff, type ParsedExpr = ExprM Expr
+instead of type ParseExpr = Parser Expr
+
+would be cleaner and easier to handle (and probably faster as well). The complication
+is that ExprM needs to be able to run Parser actions, because while creating an expression,
+we can create new local variables.
+-}
+
+data ExprError prettyThing
+     = ExprPanic Text
+     | ExprFail  String
+     | ExprPrettyFail prettyThing (prettyThing -> Parser String) -- f p >>= fail
+
+exprError :: ExprError p -> Parser a
+exprError (ExprPanic t) = panic t
+exprError (ExprFail  t) = fail t
+exprError (ExprPrettyFail p f) = f p >>= fail
+
+data ExprM a = forall p. ExprM (Either (ExprError p) a)
+
+runExprM :: ExprM a -> Parser a
+runExprM (ExprM (Right a)) = pure a
+runExprM (ExprM (Left e))  = exprError e
+
+exprPanic :: Text -> ExprM a
+exprFail  :: String -> ExprM a
+exprPFail :: p -> (p -> Parser String) -> ExprM a
+exprPanic t = ExprM $ Left (ExprPanic t)
+exprFail  s = ExprM $ Left (ExprFail s)
+exprPFail p f = ExprM $ Left (ExprPrettyFail p f)
+
+exprMap f (ExprM expr) = ExprM $ fmap f expr
+
+exprAp :: ExprM (a -> b) -> ExprM a -> ExprM b
+exprAp  (ExprM (Right f)) (ExprM (Right a)) = ExprM $ Right $ f a
+exprAp  (ExprM (Right _)) (ExprM (Left l))  = ExprM $ Left l
+exprAp  (ExprM (Left l))  _                 = ExprM $ Left l
+
+exprPure x = ExprM $ Right x
+exprBind (ExprM (Right x)) f = f x
+exprBind (ExprM (Left l))  _ = ExprM (Left l)
+
+instance Functor ExprM where fmap = exprMap
+instance Applicative ExprM where
+    pure  = exprPure
+    (<*>) = exprAp
+instance Monad ExprM where (>>=) = exprBind

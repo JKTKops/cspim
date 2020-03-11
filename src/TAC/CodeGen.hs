@@ -20,6 +20,7 @@ import MIPS.Parser (mips)
 import Data.DList
 import Data.Function ((&))
 import Data.Functor (($>))
+import Data.Int
 import Data.WordUtils
 import Data.Maybe (fromMaybe)
 import Data.Text (pack)
@@ -213,7 +214,7 @@ getRight (RVar (Right _)) = panic "getRight: right operand is non-integral const
 -- | Given an LValue, choose the best register to send a result to this lvalue
 --   and also return the code for storing from that register.
 chooseDestReg :: LValue -> CodeGen Reg
-chooseDestReg (LVar u) = do
+chooseDestReg (LVar u) =
     askMemLoc u <&> \case
         RegLoc r -> r
         _        -> compilerTemp1
@@ -284,7 +285,7 @@ ifgotoCodeGen rvalue lbl_t lbl_f = do
     -- The mips peephole optimizer will abuse the true-fallthrough to eliminate the branch
     -- Obviously, we could do it here, but this is more robust.
     emit [mips| bnez ${reg}, @{lbl_t_name}
-                b            @{lbl_f_name} |]
+                j            @{lbl_f_name} |]
 
 {- case rvalue of
     RVar (Left uniq)   -> branchVar uniq lbl_t lbl_f
@@ -294,7 +295,26 @@ ifgotoCodeGen rvalue lbl_t lbl_f = do
     Monop op v         -> branchMonop op v lbl_t lbl_f
 -}
 
-callCodeGen f_uniq args = panic "call not implemented"
+callCodeGen :: Name -> [RValue] -> CodeGen ()
+callCodeGen f_uniq args = do
+    func <- askFuncTable f_uniq
+    FunTy _ argTys <- askVarType f_uniq
+    (locs, space) <- funCallingConvention f_uniq
+    entLbl <- askLabelName $ func ^. body.entry
+    let allocs = zip3 args argTys locs
+    emit [mips| addu $sp, $sp, !{-space} |]
+    traverse placeArg allocs
+    emit [mips| jal @{entLbl}
+                addu $sp, $sp, !{space} |]
+  where placeArg (rv, ty, RegLoc r) = integralLoadRValue rv r
+        placeArg (rv, ty, loc)      = integralMovRValueOR RegSP rv ty loc
+
+funCallingConvention :: Name -> CodeGen ([MemLoc], Int32) -- OffsetLocs are SP offsets
+funCallingConvention uniq = do
+    ty <- askVarType uniq
+    case ty of
+        FunTy _ argTys -> pure $ callingConvention argTys
+        _ -> panic "CodeGen.funCallingConvention: not a function"
 
 -- | Generate code for return statements. This includes setting $v0 and the jr $ra instruction.
 --   Destroys the function's frame restoring the frame pointer,
@@ -330,7 +350,6 @@ leaveFunCodeGen uniq = do
         loadReg :: Reg -> MemLoc -> CodeGen ()
         loadReg reg (OffsetLoc off) =
             emit [mips| lw ${reg}, !{off}($sp) |]
-
 
 --------------------------------------------------------------------------------------
 --
@@ -463,19 +482,19 @@ integralLoadMemLocTypeWithDefault (OffsetLoc off) ty defReg = do
     loadInst <- integralLoadInst ty
     emit [instToLine $ loadInst defReg $ Right (off, RegFP)]
     return defReg
-integralLoadMemLocTypeWithDefault (GPLoc _ uniq) ty defReg = do
-    loadInst <- integralLoadInst ty
-    lbl      <- labelForVar uniq
-    emit [instToLine $ loadInst defReg $ Left (lbl, Nothing)]
-    return defReg
-integralLoadMemLocTypeWithDefault (DataLoc uniq) ty defReg = do
-    loadInst <- integralLoadInst ty
-    lbl      <- labelForVar uniq
-    emit [instToLine $ loadInst defReg $ Left (lbl, Nothing)]
-    return defReg
+integralLoadMemLocTypeWithDefault (GPLoc _ uniq) ty defReg =
+    iLMLTWDJoinPoint uniq ty defReg
+integralLoadMemLocTypeWithDefault (DataLoc uniq) ty defReg =
+    iLMLTWDJoinPoint uniq ty defReg
 integralLoadMemLocTypeWithDefault (RegLoc reg) _ _ = return reg
 integralLoadMemLocTypeWithDefault (FRegLoc _) _ _ =
     panic "TAC.CodeGen.integralLoadMemLocTypeWithDefault: FRegLoc!"
+
+iLMLTWDJoinPoint uniq ty defReg = do
+    loadInst <- integralLoadInst ty
+    lbl      <- labelForVar uniq
+    emit [instToLine $ loadInst defReg $ Left (lbl, Nothing)]
+    return defReg
 
 -- | Load the value from a given memory location, with the given type, into the given register.
 integralLoadMemLocType :: MemLoc -> Type -> Reg -> CodeGen ()
@@ -560,6 +579,19 @@ integralLoadRValue :: RValue -> Reg -> CodeGen ()
 integralLoadRValue rv dest = do
     reg <- integralLoadRValueWithDefault rv dest
     when (dest /= reg) $ emit [mips| move ${dest}, ${reg} |]
+
+integralMovRValueOR :: Reg -> RValue -> Type -> MemLoc -> CodeGen ()
+integralMovRValueOR or rv ty ml = do
+    treg <- integralLoadRValueWithDefault rv RegV0
+    integralStoreMemLocTypeOR or treg ty ml
+
+-- | Store the value in the second reg, with the given type, to the given memloc.
+-- Allows the specification of which register to use for OffsetLocs.
+integralStoreMemLocTypeOR :: Reg -> Reg -> Type -> MemLoc -> CodeGen ()
+integralStoreMemLocTypeOR or reg ty (OffsetLoc off) = do
+    storeInst <- integralStoreInst ty
+    emit [instToLine $ storeInst reg $ Right (off, or)]
+integralStoreMemLocTypeOR _ reg ty loc = integralStoreMemLocType reg ty loc -- TODO refactor
 
 -- | Store the value in the given reg, which has the given type, to the given memloc.
 integralStoreMemLocType :: Reg -> Type -> MemLoc -> CodeGen ()

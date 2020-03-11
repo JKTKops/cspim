@@ -20,6 +20,7 @@ import qualified Text.Parsec as P
 
 import qualified Data.Map as M
 
+import Data.Maybe (catMaybes)
 import Data.DList
 import Data.Functor (($>), (<&>))
 import Data.Int
@@ -59,34 +60,50 @@ parseC fname src = crashOutOfScope parse
         parse = runParser startParser fname src
 
 startParser :: Parser Program
-startParser = mainFunction
+startParser = do
+    fns <- topDecls
+    symTab ~> pure . Prog fns [] []
 
-mainFunction :: Parser Program
-mainFunction = do
-    reserved "int"
-    name@"main" <- identifier
-    main_uniq <- mkFreshGlobalUniq name FloatTy -- just a dummy type - it's a function!
-    parens (pure ())
-    entLbl <- labelFor "main"
+topDecls :: Parser [Function]
+topDecls = catMaybes <$> many toplevelFn
 
-    enterFunction main_uniq mapEmpty
-    body <- block
-    main_lcls <- exitFunction
+functionHead :: Parser (String, Unique, [(String, Type)])
+functionHead = do
+    retTy <- parseType
+    name  <- identifier
+    args  <- parens $ parseArg `sepBy` comma
+    let funTy = FunTy retTy $ map snd args
+    uniq <- uniqueForFunction name funTy
+    pure (name, uniq, args)
+  where parseArg = parseType >>= \ty -> identifier >>= \id -> pure (id, ty)
 
-    stackFrame <- buildStackFrame [] main_lcls
+toplevelFn :: Parser (Maybe Function) -- either just a declaration, or an actual function
+toplevelFn = do
+    info <- functionHead
+    (semi $> Nothing) <|> (Just <$> functionDecl info)
+
+functionDecl :: (String, Unique, [(String, Type)]) -> Parser Function
+functionDecl (name, uniq, args) = do
+    entLbl   <- labelFor name
+    argUniqs <- enterFunction uniq args
+    body     <- block
+    lcls     <- exitFunction
+
+    stackFrame <- buildStackFrame argUniqs lcls
 
     let graph = mkFirst (Label entLbl)
-                <*|*> mkMiddle (Enter main_uniq)
+                <*|*> mkMiddle (Enter uniq)
                 <*|*> body
-                -- main always returns 0 if it reaches the end
-                <*|*> mkLast (Return $ Just $ RVar $ Right $ IntConst 0)
-        fn = Fn { _name = main_uniq, _args = []
-                , _locals = main_lcls, _stackFrame = stackFrame
-                , _body = TacGraph graph entLbl
+                -- main always returns 0 if it reaches the end,
+                -- and other non-void functions it is UB.
+                <*|*> if name == "main"
+                      then mkLast (Return $ Just $ RVar $ Right $ IntConst 0)
+                      else mkLast (Return Nothing)
+        fn = Fn { _name = uniq, _args = argUniqs, _locals = lcls
+                , _stackFrame = stackFrame, _body = TacGraph graph entLbl
                 }
-
-    symTab.funcTable %= mapInsert main_uniq fn
-    symTab ~> return . Prog [fn] [] []
+    symTab.funcTable %= mapInsert uniq fn
+    return fn
 
 block :: Parser (Graph Insn O O)
 block = pushNewScope *> braces blockItemList <* popTopScope

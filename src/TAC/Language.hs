@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 module TAC.Language
     ( module Compiler.Hoopl
@@ -6,8 +7,12 @@ module TAC.Language
     ) where
 
 import Compiler.Hoopl
-import MIPS.Language (Reg, FReg, Offset)
+import MIPS.Language (Reg(..), FReg, Offset)
 import Control.Lens.TH
+import Control.Lens
+import Control.Monad.Identity
+import Control.Monad.State
+import Data.Function ((&))
 
 import Data.Int
 import qualified Data.Map as M
@@ -154,7 +159,9 @@ data Type
      | IntTy Signage
      | FloatTy
      | DoubleTy
-     | ArrTy Int Type -- Type[Int]
+     | VoidTy            -- Absence of type
+     | ArrTy Int Type    -- Type[Int]
+     | FunTy Type [Type] -- Type function([Type])
      deriving (Eq, Ord, Show)
 
 data Signage = Signed | Unsigned
@@ -170,6 +177,10 @@ isIntegralTy (ShortTy _) = True
 isIntegralTy (CharTy _)  = True
 isIntegralTy (ArrTy _ _) = True -- this is a pointer type, which is integral
 isIntegralTy _ = False
+
+isFunTy :: Type -> Bool
+isFunTy (FunTy _ _) = True
+isFunTy _           = False
 
 signageOf :: Type -> Signage
 signageOf (CharTy s)  = s
@@ -199,13 +210,36 @@ alignOffset v a =
   then v
   else v + a - (v `mod` a)
 
-data TacGraph = TacGraph
-    { _graph :: Graph Insn C C
-    , _entry :: Label
-    }
-makeLenses ''TacGraph
+-- | A monad for computing allocations of things. Wrapper on State.
+-- Exposed for the purposes of the parser, which uses it to do ugly hacks
+-- that aren't necessary but I'm too lazy to fix at this point.
+newtype AllocT m a = AT { unAT :: StateT Int32 m a }
+  deriving (Functor, Applicative, Monad, MonadTrans)
 
-type TacBlock = Block Insn C C
+-- | Snd is the number of bytes consumed.
+runAllocT :: AllocT m a -> m (a, Int32)
+runAllocT (AT action) = runStateT action 0
+
+addrFor :: Monad m => Type -> AllocT m Int32
+addrFor ty = (AT $ do
+    current <- get
+    let addr = alignOffset current $ fromIntegral $ sizeof ty
+    state $ const (addr, addr)) <* consumeType ty
+
+consumeSize :: Monad m => Int -> AllocT m ()
+consumeSize n = AT $ modify $ \s -> s + fromIntegral n
+
+consumeType :: Monad m => Type -> AllocT m ()
+consumeType = consumeSize . sizeof
+
+callingConvention :: [Type] -> ([MemLoc], Int32)
+callingConvention types =
+    let (regArgs, stackArgs) = splitAt 4 types
+        -- get a list of regLocs of the correct length
+        regLocs = zipWith const (map RegLoc [RegA0 .. RegA3]) regArgs
+        alloc = traverse addrFor stackArgs
+        (stackAllocs, space) = alloc & runAllocT & runIdentity
+    in (regLocs ++ map OffsetLoc stackAllocs, space)
 
 data MemLoc = OffsetLoc !Int32
             | RegLoc !Reg
@@ -221,6 +255,14 @@ data MemLoc = OffsetLoc !Int32
             -- or .space <size> if it isn't
             | DataLoc !Unique
             deriving Eq
+
+data TacGraph = TacGraph
+    { _graph :: Graph Insn C C
+    , _entry :: Label
+    }
+makeLenses ''TacGraph
+
+type TacBlock = Block Insn C C
 
 data Function = Fn
      { _name       :: Name

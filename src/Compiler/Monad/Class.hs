@@ -186,13 +186,16 @@ instance MonadCompiler Compiler where
 
 instance FullMonadCompiler Compiler where
     runMonadCompiler (C m) = C $ do
-        us0   <- lift $ lift $ lift unsafeGetUniqueSupplyM
+        us0   <- lift $ lift $ lift getUniqueSupplyM
         flags <- ask
         let stat = runReaderT m flags
                  & evalValidateT
                  & Strict.runWriterT
-                 & evalUniqueSM us0
-        Strict.tell (snd stat) -- otherwise we throw away the dumps
+                 & evalUniqueSM us0 -- if there is ever a problem with uniques being generated
+                                    -- out the wazoo and never used, this is probably why.
+                                    -- We split off a UniqueSupply from the underlying UniqueSM
+                                    -- and pass it back in here.
+        Strict.tell $ snd stat -- otherwise we throw away the dumps
         return $ fst stat
 
 instance MonadCompiler m => MonadCompiler (ReaderT r m) where

@@ -10,6 +10,7 @@ module Parser.Monad
 import Pretty
 
 import TAC.Program hiding (NoChange, globalVars)
+import TAC.Pretty () -- instances for Type
 import MIPS.Language (Reg(..))
 import Compiler.Error
 import Compiler.Flags
@@ -53,9 +54,8 @@ type NameMap = M.Map String Unique
 
 data ParserState = PS
     { _globalVars    :: NameMap -- function names go here as they are created
-                                -- TODO:
-                                -- At some point it might be a good idea to also put them in
-                                -- the varType map to catch errors with argument counts etc
+                                -- they are also put into the varType map to
+                                -- catch errors with argument counts etc
     , _labels        :: M.Map String Label -- making LabelMap is ambiguous
     , _localVarScope :: [NameMap]
     , _funName       :: Maybe Unique
@@ -84,10 +84,20 @@ emptyParserState = PS mapEmpty mapEmpty [] Nothing emptyTable []
 
 data CustomParseError
      = VariableNotInScope P.SourcePos String
+     | FunctionRedeclBadlyTyped Type Type
+     | FunctionCallBadlyTyped Text [Type] [Type]
 
 instance Pretty CustomParseError where
     pretty (VariableNotInScope p str) = T.pack $ show p <> ": Out of scope variable: `"
                                                         <> str <> "'"
+    pretty (FunctionRedeclBadlyTyped ty1 ty2) =
+        "Redeclaration of function with incompatible types "
+        <> pretty ty1 <> " and " <> pretty ty2
+
+    pretty (FunctionCallBadlyTyped name exp act) =
+        "Bad arguments for call of function `" <> name <> "'\n"
+        <> "  Expected: (" <>  T.intercalate ", " (map pretty exp) <> ")\n"
+        <> "     Found: (" <> T.intercalate ", " (map pretty act) <> ")"
 
 instance CompileError CustomParseError where
     flagAffects FDeferOutOfScopeErrors (VariableNotInScope _ _) = E2Warning
@@ -112,6 +122,11 @@ expecting lbl p = p <?> lbl
 try :: Parser a -> Parser a
 try = P . P.try . unP
 
+-- | Exposed because it's very useful and Parsec can't expose it because it doesn't know
+-- the stream type.
+tpParens :: Monad m => ParsecT Text u m a -> ParsecT Text u m a
+tpParens = P.between (L.symbol "(") (L.symbol ")")
+
 parens, braces, brackets, angles :: Parser a -> Parser a
 parens   = P . P.between (L.symbol "(") (L.symbol ")") . unP
 braces   = P . P.between (L.symbol "{") (L.symbol "}") . unP
@@ -127,9 +142,10 @@ natural = P L.natural
 float :: Parser Double
 float = P L.float
 
-dot, semi :: Parser ()
-dot = P L.dot
-semi = P L.semi
+dot, comma, semi :: Parser ()
+dot   = P L.dot
+comma = P L.comma
+semi  = P L.semi
 
 reserved :: String -> Parser ()
 reserved = P . L.reserved
@@ -143,6 +159,10 @@ reservedOp = P . L.reservedOp
 many, many1 :: Parser a -> Parser [a]
 many = P . P.many . unP
 many1 = P . P.many1 . unP
+
+sepBy, sepBy1 :: Parser a -> Parser b -> Parser [a]
+sepBy  thing sep = P $ unP thing `P.sepBy`  unP sep
+sepBy1 thing sep = P $ unP thing `P.sepBy1` unP sep
 
 optionMaybe :: Parser a -> Parser (Maybe a)
 optionMaybe = P . P.optionMaybe . unP
@@ -165,15 +185,17 @@ popTopScope = do
     scopes <- use localVarScope
     case scopes of
         [] -> panic "Attempt to pop variable scope from empty stack"
-        (x:xs) -> (localVarScope %= tail) $> x
+        (x:xs) -> (localVarScope .= xs) $> x
 
 -- | Manages the steps of entering a function definition, including pushing a scope
---   and putting the arguments of the function (the NameMap) into it.
-enterFunction :: Name -> NameMap -> Parser ()
+--   and putting the arguments of the function (the association list) into it.
+--   Returns the uniques generated for the arguments.
+enterFunction :: Name -> [(String, Type)] -> Parser [Name]
 enterFunction n as = do
     pushNewScope
-    localVarScope._head .= as
+    uniqs <- mapM (uncurry mkFreshLocalUniq) as
     funName ?= n
+    pure uniqs
 
 -- | Exits the definition of the current function.
 --   Returns a list of all the local variables defined in the function.
@@ -269,6 +291,20 @@ mkFreshGlobalUniq name vtype = do
     symTabAddVar uniq (Just name) vtype
     return uniq
 
+-- | Get a unique for a function, intended to be used for function declarations.
+-- If the function has been declared before, asserts that the types match. Otherwise,
+-- generates a fresh global unique for the new name.
+uniqueForFunction :: String -> Type -> Parser Unique
+uniqueForFunction name ftype = do
+    m <- uses globalVars $ mapLookup name
+    case m of
+        Just uniq -> checkFunctionType uniq $> uniq
+        Nothing   -> mkFreshGlobalUniq name ftype
+  where checkFunctionType u = do
+            Just knownType <- askVarTypeM u
+            when (knownType /= ftype) $ customParseError $
+                FunctionRedeclBadlyTyped knownType ftype
+
 symTabAddVar :: Unique -> Maybe String -> Type -> Parser ()
 symTabAddVar uniq mname vtype = do
     whenJust mname $ \name -> symTab.varNames %= mapInsert uniq name
@@ -281,24 +317,6 @@ symTabAddVar uniq mname vtype = do
 --------------------------------------------------------------------------------------
 
 -- NOTE: we need access to the type tables here so all wrapped up in Parser
-
-newtype AllocT m a = AT { unAT :: StateT Int32 m a }
-  deriving (Functor, Applicative, Monad, MonadTrans)
-
-runAllocT :: AllocT m a -> m (a, Int32)
-runAllocT (AT action) = runStateT action 0
-
-addrFor :: Monad m => Type -> AllocT m Int32
-addrFor ty = (AT $ do
-    current <- get
-    let addr = alignOffset current $ fromIntegral $ sizeof ty
-    state $ const (addr, addr)) <* consumeType ty
-
-consumeSize :: Monad m => Int -> AllocT m ()
-consumeSize n = AT $ modify $ \s -> s + fromIntegral n
-
-consumeType :: Monad m => Type -> AllocT m ()
-consumeType = consumeSize . sizeof
 
 -- | Computes the allocation table for a list of local variables. Everything is allocated
 --   to the stack. Returns an allocation table that is based at offset 0, and the
@@ -319,8 +337,9 @@ stack words consumed.
 -}
 computeArgumentVarAllocation :: [Name] -> Parser ([(Name, MemLoc)], [(Name, MemLoc)], Int32)
 computeArgumentVarAllocation vars = do
-    let (regArgs, stackArgs) = splitAt 4 vars -- this is wrong! TODO TODO TODO TODO TODO
-        -- updated TODO is to abstract this out into a memory model class
+    -- this is wrong! Longs would require more than 2 registers to pass in.
+    -- However, I don't seem to plan on /supporting/ longs, so this is fine.
+    let (regArgs, stackArgs) = splitAt 4 vars
         regLocs = zip regArgs $ map RegLoc [RegA0 .. RegA3]
     (offsets, totalSpace) <- runAllocT $ computeAllocs stackArgs
     let stackLocs = zip stackArgs $ map OffsetLoc offsets
